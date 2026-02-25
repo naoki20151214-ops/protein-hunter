@@ -58,8 +58,6 @@ STRICT_CAPACITY_MATCH = True
 RAKUTEN_ENDPOINT = "https://app.rakuten.co.jp/services/api/IchibaItem/Search/20170426"
 
 
-print("RAKUTEN_APP_ID length:", len(os.environ.get("RAKUTEN_APP_ID","")))
-print("RAKUTEN_ENDPOINT:", RAKUTEN_ENDPOINT)
 
 # =========================
 # Data models
