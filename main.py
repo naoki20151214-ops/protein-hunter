@@ -419,6 +419,7 @@ def compute_offer(master: MasterItem, item: Dict[str, Any]) -> Optional[OfferRow
 # Main
 # =========================
 def main():
+    print("ACCESS_KEY len:", len(os.environ.get("RAKUTEN_ACCESS_KEY","")))
     print("APP_ID:", os.environ.get("RAKUTEN_APP_ID", "")[:6], "len=", len(os.environ.get("RAKUTEN_APP_ID","")))
     print("ENDPOINT:", RAKUTEN_ENDPOINT)
     today = jst_today_str()
