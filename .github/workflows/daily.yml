@@ -1,0 +1,38 @@
+name: Rakuten Protein Tracker
+
+on:
+  schedule:
+    - cron: "0 21 * * *" # JST 06:00 (UTC 21:00)
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        run: pip install -r requirements.txt
+
+      - name: Run tracker
+        env:
+          RAKUTEN_APP_ID: ${{ secrets.RAKUTEN_APP_ID }}
+          RAKUTEN_AFFILIATE_ID: ${{ secrets.RAKUTEN_AFFILIATE_ID }}
+          SHEET_ID: ${{ secrets.SHEET_ID }}
+          GSPREAD_SERVICE_ACCOUNT_JSON_B64: ${{ secrets.GSPREAD_SERVICE_ACCOUNT_JSON_B64 }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+
+          # optional tuning
+          DEFAULT_SHIPPING_YEN: "800"
+          FETCH_HITS: "100"
+          STORE_HITS: "20"
+          REQUEST_SLEEP_SEC: "1.0"
+          EXTRA_POINT_RATE: "0.0"
+
+          # optional: override default excludes (comma-separated)
+          # EXCLUDE_KEYWORDS: ${{ secrets.EXCLUDE_KEYWORDS }}
+        run: python main.py
