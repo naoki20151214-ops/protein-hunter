@@ -17,6 +17,7 @@ import gspread
 # Config (GitHub Secrets / Env)
 # =========================
 RAKUTEN_APP_ID = os.environ.get("RAKUTEN_APP_ID", "").strip()
+RAKUTEN_ACCESS_KEY = os.environ.get("RAKUTEN_ACCESS_KEY", "").strip()
 RAKUTEN_AFFILIATE_ID = os.environ.get("RAKUTEN_AFFILIATE_ID", "").strip()
 
 SHEET_ID = os.environ.get("SHEET_ID", "").strip()
@@ -271,6 +272,7 @@ def rakuten_search_page(keyword: str, page: int, hits: int) -> List[Dict[str, An
 
     params = {
         "applicationId": RAKUTEN_APP_ID,
+        "accessKey": RAKUTEN_ACCESS_KEY,  # ← 追加（必須）
         "keyword": keyword,
         "hits": max(1, min(30, hits)),
         "page": page,
