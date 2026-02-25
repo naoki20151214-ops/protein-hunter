@@ -55,8 +55,7 @@ EXCLUDE_KEYWORDS = [k.strip() for k in os.environ.get(
 STRICT_CAPACITY_MATCH = True
 
 # Rakuten endpoint (Ichiba Item Search)
-RAKUTEN_ENDPOINT = "https://app.rakuten.co.jp/services/api/IchibaItem/Search/20170426"
-
+RAKUTEN_ENDPOINT = "https://openapi.rakuten.co.jp/ichibams/api/IchibaItem/Search/20220601"
 
 
 # =========================
@@ -415,6 +414,8 @@ def compute_offer(master: MasterItem, item: Dict[str, Any]) -> Optional[OfferRow
 # Main
 # =========================
 def main():
+    print("APP_ID:", os.environ.get("RAKUTEN_APP_ID", "")[:6], "len=", len(os.environ.get("RAKUTEN_APP_ID","")))
+    print("ENDPOINT:", RAKUTEN_ENDPOINT)
     today = jst_today_str()
     yesterday = (jst_date() - timedelta(days=1)).isoformat()
 
