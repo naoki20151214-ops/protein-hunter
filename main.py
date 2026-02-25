@@ -16,8 +16,7 @@ import gspread
 # =========================
 # Config (GitHub Secrets / Env)
 # =========================
-#RAKUTEN_APP_ID = os.environ.get("RAKUTEN_APP_ID", "").strip()
-RAKUTEN_APP_ID = "1099231584818186174"
+RAKUTEN_APP_ID = os.environ.get("RAKUTEN_APP_ID", "").strip()
 RAKUTEN_AFFILIATE_ID = os.environ.get("RAKUTEN_AFFILIATE_ID", "").strip()
 
 SHEET_ID = os.environ.get("SHEET_ID", "").strip()
