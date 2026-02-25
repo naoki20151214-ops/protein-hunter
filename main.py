@@ -55,7 +55,8 @@ EXCLUDE_KEYWORDS = [k.strip() for k in os.environ.get(
 STRICT_CAPACITY_MATCH = True
 
 # Rakuten endpoint (Ichiba Item Search)
-RAKUTEN_ENDPOINT = "https://openapi.rakuten.co.jp/ichibams/api/IchibaItem/Search/20220601"
+RAKUTEN_ENDPOINT = "https://app.rakuten.co.jp/services/api/IchibaItem/Search/20170426"
+
 
 
 # =========================
