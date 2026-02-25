@@ -295,9 +295,6 @@ def rakuten_search_page(keyword: str, page: int, hits: int) -> List[Dict[str, An
         params["affiliateId"] = RAKUTEN_AFFILIATE_ID
 
     resp = requests.get(RAKUTEN_ENDPOINT, params=params, timeout=30)
-    if resp.status_code >= 400:
-    print("Rakuten status:", resp.status_code)
-    print("Rakuten body:", resp.text[:2000])
     resp.raise_for_status()
     data = resp.json()
     return data.get("items") or []
