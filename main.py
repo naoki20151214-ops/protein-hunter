@@ -17,7 +17,6 @@ import gspread
 # Config (GitHub Secrets / Env)
 # =========================
 RAKUTEN_APP_ID = os.environ.get("RAKUTEN_APP_ID", "").strip()
-RAKUTEN_ACCESS_KEY = os.environ.get("RAKUTEN_ACCESS_KEY", "").strip()
 RAKUTEN_AFFILIATE_ID = os.environ.get("RAKUTEN_AFFILIATE_ID", "").strip()
 
 SHEET_ID = os.environ.get("SHEET_ID", "").strip()
@@ -56,7 +55,7 @@ EXCLUDE_KEYWORDS = [k.strip() for k in os.environ.get(
 STRICT_CAPACITY_MATCH = True
 
 # Rakuten endpoint (Ichiba Item Search)
-RAKUTEN_ENDPOINT = "https://openapi.rakuten.co.jp/ichibams/api/IchibaItem/Search/20220601"
+RAKUTEN_ENDPOINT = "https://app.rakuten.co.jp/services/api/IchibaItem/Search/20220601"
 
 
 # =========================
@@ -272,7 +271,6 @@ def rakuten_search_page(keyword: str, page: int, hits: int) -> List[Dict[str, An
 
     params = {
         "applicationId": RAKUTEN_APP_ID,
-        "accessKey": RAKUTEN_ACCESS_KEY,  # ← 追加（必須）
         "keyword": keyword,
         "hits": max(1, min(30, hits)),
         "page": page,
