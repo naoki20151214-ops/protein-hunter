@@ -262,10 +262,6 @@ def upsert_today_min(min_ws, date: str, cid: str, min_cost: float, min_shop: str
 # Rakuten API
 # =========================
 def rakuten_search_page(keyword: str, page: int, hits: int) -> List[Dict[str, Any]]:
-    """
-    Uses formatVersion=2 so items are returned as flat dicts.
-    NOTE: hits max is 30 per page.
-    """
     if not RAKUTEN_APP_ID:
         raise RuntimeError("Missing RAKUTEN_APP_ID")
 
@@ -274,20 +270,18 @@ def rakuten_search_page(keyword: str, page: int, hits: int) -> List[Dict[str, An
         "keyword": keyword,
         "hits": max(1, min(30, hits)),
         "page": page,
-        "sort": "+itemPrice",   # raw price sort; we re-sort by effective price later
+        "sort": "+itemPrice",
         "format": "json",
         "formatVersion": 2,
-        "elements": ",".join(
-            [
-                "itemCode",
-                "itemName",
-                "itemPrice",
-                "itemUrl",
-                "shopName",
-                "postageFlag",
-                "pointRate",
-            ]
-        ),
+        "elements": ",".join([
+            "itemCode",
+            "itemName",
+            "itemPrice",
+            "itemUrl",
+            "shopName",
+            "postageFlag",
+            "pointRate",
+        ]),
     }
     if RAKUTEN_AFFILIATE_ID:
         params["affiliateId"] = RAKUTEN_AFFILIATE_ID
@@ -295,20 +289,18 @@ def rakuten_search_page(keyword: str, page: int, hits: int) -> List[Dict[str, An
     resp = requests.get(RAKUTEN_ENDPOINT, params=params, timeout=30)
     resp.raise_for_status()
     data = resp.json()
+
     # formatVersion=2 style
-if isinstance(data, dict) and data.get("items"):
-    return data["items"]
+    if isinstance(data, dict) and data.get("items"):
+        return data["items"]
 
-# old style (Items → Item)
-if isinstance(data, dict) and data.get("Items"):
-    return [x.get("Item") for x in data["Items"] if x.get("Item")]
+    # old style (Items → Item)
+    if isinstance(data, dict) and data.get("Items"):
+        return [x.get("Item") for x in data["Items"] if x.get("Item")]
 
-return []
+    return []
 
 def rakuten_search_multi_pages(keyword: str, total_hits: int) -> List[Dict[str, Any]]:
-    """
-    Fetch up to total_hits by paging (max 30 per page).
-    """
     all_items: List[Dict[str, Any]] = []
     remaining = total_hits
     page = 1
@@ -318,22 +310,20 @@ def rakuten_search_multi_pages(keyword: str, total_hits: int) -> List[Dict[str, 
         items = rakuten_search_page(keyword, page=page, hits=hits)
         if not items:
             break
+
         all_items.extend(items)
         remaining -= len(items)
 
-        # If API returned fewer than requested, likely no more pages
         if len(items) < hits:
             break
 
         page += 1
-        if page > 10:  # safety
+        if page > 10:
             break
 
-        # be gentle
         time.sleep(0.3)
-　　　print("keyword:", m.search_keyword, "items:", len(items), "sample:", str(items[0].get("itemName",""))[:60] if items else "NONE")
-return all_items
 
+    return all_items
 
 # =========================
 # Filtering / Compute
@@ -356,7 +346,7 @@ def _norm_name(s: str) -> str:
 
 def capacity_strict_match(master: MasterItem, item_name: str) -> bool:
     if not STRICT_CAPACITY_MATCH:
-        return True
+        return False
     if master.capacity_kg <= 0:
         return True
 
