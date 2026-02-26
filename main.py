@@ -334,36 +334,30 @@ def looks_like_garbage(item_name: str) -> bool:
     name = item_name or ""
     return any(k in name for k in EXCLUDE_KEYWORDS)
 
+import re
+
 def capacity_strict_match(master: MasterItem, item_name: str) -> bool:
-    """
-    Strict capacity match per final spec.
-    Rule:
-      - If master.capacity_kg >= 1.0 -> require "<N>kg" token in itemName (N rounded to int if .0)
-      - If 0 < master.capacity_kg < 1.0 -> require "<grams>g" token
-    This is intentionally strict to reduce mismatches.
-    """
     if not STRICT_CAPACITY_MATCH:
         return True
     if master.capacity_kg <= 0:
         return True
 
-    name = item_name or ""
+    name = item_name.lower()
+
+    # 全角数字→半角変換
+    name = name.translate(str.maketrans("０１２３４５６７８９", "0123456789"))
+
     kg = master.capacity_kg
 
     if kg >= 1.0:
-        # support 2.5kg etc
-        if abs(kg - round(kg)) < 1e-9:
-            token = f"{int(round(kg))}kg"
-            return token in name
-        else:
-            # 2.5kg token
-            token = f"{kg:g}kg"
-            return token in name
+        # 3kg, 3 kg, 3kg×1 など許可
+        pattern = rf"\b{int(round(kg))}\s?kg\b"
+        return re.search(pattern, name) is not None
 
     grams = int(round(kg * 1000))
-    token_g = f"{grams}g"
-    return token_g in name
-
+    pattern = rf"\b{grams}\s?g\b"
+    return re.search(pattern, name) is not None
+    
 def compute_offer(master: MasterItem, item: Dict[str, Any]) -> Optional[OfferRow]:
     date = jst_today_str()
     item_code = str(item.get("itemCode", "")).strip()
