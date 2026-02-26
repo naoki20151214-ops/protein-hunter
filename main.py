@@ -170,29 +170,34 @@ def log_hatena_service_document(auth: Tuple[str, str], service_endpoint: str) ->
 
 def build_top3_markdown(best_offers: List[OfferRow]) -> str:
     lines = [
-        "# 今日のTOP3プロテイン価格ランキング",
+        f"## 🏆 今日のプロテイン価格ランキング – {jst_today_str()}",
         "",
-        f"- 集計日: {jst_today_str()}",
         f"- 基準: タンパク質1kgあたり実質コスト（価格 + 送料 - ポイント）",
         "",
     ]
 
     if not best_offers:
-        lines.append("本日のランキングは作成できませんでした（対象データなし）。")
+        lines.extend([
+            "### 本日のランキング結果",
+            "- 該当なし（対象データが見つかりませんでした）",
+        ])
         return "\n".join(lines)
 
+    rank_icons = {1: "🥇", 2: "🥈", 3: "🥉"}
     for i, offer in enumerate(best_offers[:3], 1):
+        rank_icon = rank_icons.get(i, "🏅")
         lines.extend(
             [
-                f"## {i}位: {offer.canonical_id}",
-                f"- ショップ: {offer.shop_name}",
-                f"- 実質コスト: **{offer.protein_cost:,.0f}円** / タンパク質1kg",
-                f"- 価格内訳: 本体 {offer.raw_price:,}円 + 送料 {offer.shipping_cost:,}円 / pt {offer.point_rate * 100:.1f}%",
-                f"- 商品名: {offer.item_name}",
-                f"- URL: {offer.item_url}",
+                f"### {rank_icon} 第{i}位：**{offer.item_name}**",
+                f"- 実質コスト：{offer.protein_cost:,.0f}円 / タンパク質1kg",
+                f"- 価格詳細：本体 {offer.raw_price:,}円 / 送料 {offer.shipping_cost:,}円 / ポイント {offer.point_rate * 100:.1f}%",
+                f"- ショップ：{offer.shop_name}",
+                f"- 🎯 リンク：👉 [楽天で商品を見る]({offer.item_url})",
                 "",
             ]
         )
+
+    lines.extend(["---", "", "※ このフォーマットははてなブログAtomPub投稿用です。"])
 
     return "\n".join(lines).strip()
 
