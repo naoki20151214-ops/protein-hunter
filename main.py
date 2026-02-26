@@ -4,6 +4,7 @@ import math
 import time
 import base64
 import traceback
+from xml.sax.saxutils import escape
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -25,6 +26,10 @@ SHEET_ID = os.environ.get("SHEET_ID", "").strip()
 GSPREAD_SERVICE_ACCOUNT_JSON_B64 = os.environ.get("GSPREAD_SERVICE_ACCOUNT_JSON_B64", "").strip()
 
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
+HATENA_ID = os.environ.get("HATENA_ID", "").strip()
+HATENA_API_KEY = os.environ.get("HATENA_API_KEY", "").strip()
+
+HATENA_BLOG_ATOM_ENDPOINT = "https://blog.hatena.ne.jp/naoki1978/protein-hunter.hatenablog.com/atom/entry"
 
 # Rakuten postageFlag (official): 0 = shipping included, 1 = shipping NOT included 
 DEFAULT_SHIPPING_YEN = int(os.environ.get("DEFAULT_SHIPPING_YEN", "800"))
@@ -115,6 +120,67 @@ def discord_notify(title: str, lines: List[str]) -> None:
     content = f"**{title}**\n" + "\n".join(lines)
     content = content[:1800]
     requests.post(DISCORD_WEBHOOK_URL, json={"content": content}, timeout=20)
+
+
+def build_top3_markdown(best_offers: List[OfferRow]) -> str:
+    lines = [
+        "# 今日のTOP3プロテイン価格ランキング",
+        "",
+        f"- 集計日: {jst_today_str()}",
+        f"- 基準: タンパク質1kgあたり実質コスト（価格 + 送料 - ポイント）",
+        "",
+    ]
+
+    if not best_offers:
+        lines.append("本日のランキングは作成できませんでした（対象データなし）。")
+        return "\n".join(lines)
+
+    for i, offer in enumerate(best_offers[:3], 1):
+        lines.extend(
+            [
+                f"## {i}位: {offer.canonical_id}",
+                f"- ショップ: {offer.shop_name}",
+                f"- 実質コスト: **{offer.protein_cost:,.0f}円** / タンパク質1kg",
+                f"- 価格内訳: 本体 {offer.raw_price:,}円 + 送料 {offer.shipping_cost:,}円 / pt {offer.point_rate * 100:.1f}%",
+                f"- 商品名: {offer.item_name}",
+                f"- URL: {offer.item_url}",
+                "",
+            ]
+        )
+
+    return "\n".join(lines).strip()
+
+
+def post_top3_to_hatena(markdown_body: str) -> None:
+    if not HATENA_ID or not HATENA_API_KEY:
+        print("WARNING hatena: skipped post because HATENA_ID or HATENA_API_KEY is missing")
+        return
+
+    title = f"【プロテイン価格ランキング】{jst_today_str()}"
+    atom_xml = f"""<?xml version=\"1.0\" encoding=\"utf-8\"?>
+<entry xmlns=\"http://www.w3.org/2005/Atom\" xmlns:app=\"http://www.w3.org/2007/app\">
+  <title>{escape(title)}</title>
+  <author><name>{escape(HATENA_ID)}</name></author>
+  <content type=\"text/x-markdown\">{escape(markdown_body)}</content>
+  <app:control>
+    <app:draft>yes</app:draft>
+  </app:control>
+</entry>
+"""
+
+    try:
+        resp = requests.post(
+            HATENA_BLOG_ATOM_ENDPOINT,
+            data=atom_xml.encode("utf-8"),
+            auth=(HATENA_ID, HATENA_API_KEY),
+            headers={"Content-Type": "application/xml; charset=utf-8"},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        print(f"INFO hatena: draft post succeeded status={resp.status_code}")
+    except Exception:
+        print("ERROR hatena: failed to post top3 draft")
+        traceback.print_exc()
 
 
 # =========================
@@ -480,6 +546,7 @@ def main():
 
     all_offers: List[OfferRow] = []
     notify_payloads: List[Tuple[str, List[str]]] = []
+    best_offers_for_ranking: List[OfferRow] = []
 
     for m in masters:
         time.sleep(REQUEST_SLEEP_SEC)
@@ -537,6 +604,7 @@ def main():
         # Determine today's best and upsert Min_Summary
         if offers_for_this:
             best = offers_for_this[0]
+            best_offers_for_ranking.append(best)
             upsert_today_min(min_ws, today, m.canonical_id, best.protein_cost, best.shop_name, best.item_url)
 
             y_best = yday_min.get(m.canonical_id)
@@ -582,6 +650,11 @@ def main():
     # Send notifications
     for title, lines in notify_payloads:
         discord_notify(title, lines)
+
+    # Post Top3 ranking to Hatena Blog (draft)
+    best_offers_for_ranking.sort(key=lambda x: x.protein_cost)
+    ranking_markdown = build_top3_markdown(best_offers_for_ranking)
+    post_top3_to_hatena(ranking_markdown)
 
     print(f"OK: appended {len(all_offers)} rows, notified {len(notify_payloads)} items.")
 
