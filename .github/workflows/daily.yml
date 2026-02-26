@@ -27,13 +27,15 @@ jobs:
           GSPREAD_SERVICE_ACCOUNT_JSON_B64: ${{ secrets.GSPREAD_SERVICE_ACCOUNT_JSON_B64 }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
 
+          # Hatena
+          HATENA_ID: ${{ secrets.HATENA_ID }}
+          HATENA_API_KEY: ${{ secrets.HATENA_API_KEY }}
+          HATENA_BLOG_ID: ${{ secrets.HATENA_BLOG_ID }}
+
           # optional tuning
           DEFAULT_SHIPPING_YEN: "800"
           FETCH_HITS: "100"
           STORE_HITS: "20"
           REQUEST_SLEEP_SEC: "1.0"
           EXTRA_POINT_RATE: "0.0"
-
-          # optional: override default excludes (comma-separated)
-          # EXCLUDE_KEYWORDS: ${{ secrets.EXCLUDE_KEYWORDS }}
         run: python main.py
