@@ -3,6 +3,7 @@ import json
 import math
 import time
 import base64
+import re
 import traceback
 from xml.sax.saxutils import escape
 from dataclasses import dataclass
@@ -28,8 +29,9 @@ GSPREAD_SERVICE_ACCOUNT_JSON_B64 = os.environ.get("GSPREAD_SERVICE_ACCOUNT_JSON_
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
 HATENA_ID = os.environ.get("HATENA_ID", "").strip()
 HATENA_API_KEY = os.environ.get("HATENA_API_KEY", "").strip()
+HATENA_BLOG_ID = os.environ.get("HATENA_BLOG_ID", "").strip()
 
-HATENA_BLOG_ATOM_ENDPOINT = "https://blog.hatena.ne.jp/naoki1978/protein-hunter.hatenablog.com/atom/entry"
+HATENA_API_BASE = "https://blog.hatena.ne.jp"
 
 # Rakuten postageFlag (official): 0 = shipping included, 1 = shipping NOT included 
 DEFAULT_SHIPPING_YEN = int(os.environ.get("DEFAULT_SHIPPING_YEN", "800"))
@@ -119,7 +121,43 @@ def discord_notify(title: str, lines: List[str]) -> None:
         return
     content = f"**{title}**\n" + "\n".join(lines)
     content = content[:1800]
-    requests.post(DISCORD_WEBHOOK_URL, json={"content": content}, timeout=20)
+    try:
+        resp = requests.post(DISCORD_WEBHOOK_URL, json={"content": content}, timeout=20)
+        resp.raise_for_status()
+    except Exception:
+        print(f"ERROR discord: failed to send notification title={title[:80]}")
+        traceback.print_exc()
+
+
+def build_hatena_service_endpoint() -> Optional[str]:
+    if not HATENA_ID or not HATENA_BLOG_ID:
+        return None
+    return f"{HATENA_API_BASE}/{HATENA_ID}/{HATENA_BLOG_ID}/atom"
+
+
+def build_hatena_entry_endpoint() -> Optional[str]:
+    service_endpoint = build_hatena_service_endpoint()
+    if not service_endpoint:
+        return None
+    return f"{service_endpoint}/entry"
+
+
+def log_hatena_service_document(auth: Tuple[str, str], service_endpoint: str) -> None:
+    try:
+        resp = requests.get(service_endpoint, auth=auth, timeout=30)
+        print(f"DEBUG hatena: service_document status={resp.status_code} endpoint={service_endpoint}")
+        body_preview = (resp.text or "")[:500].replace("\n", " ").strip()
+        if body_preview:
+            print(f"DEBUG hatena: service_document body_preview={body_preview}")
+
+        collection_hrefs = re.findall(r'<collection[^>]*href="([^"]+)"', resp.text or "")
+        if collection_hrefs:
+            print("DEBUG hatena: service_document collections=" + ", ".join(collection_hrefs))
+        else:
+            print("DEBUG hatena: service_document collections not found")
+    except Exception:
+        print("ERROR hatena: failed to fetch service document for diagnostics")
+        traceback.print_exc()
 
 
 def build_top3_markdown(best_offers: List[OfferRow]) -> str:
@@ -152,8 +190,14 @@ def build_top3_markdown(best_offers: List[OfferRow]) -> str:
 
 
 def post_top3_to_hatena(markdown_body: str) -> None:
-    if not HATENA_ID or not HATENA_API_KEY:
-        print("WARNING hatena: skipped post because HATENA_ID or HATENA_API_KEY is missing")
+    if not HATENA_ID or not HATENA_API_KEY or not HATENA_BLOG_ID:
+        print("WARNING hatena: skipped post because HATENA_ID/HATENA_API_KEY/HATENA_BLOG_ID is missing")
+        return
+
+    entry_endpoint = build_hatena_entry_endpoint()
+    service_endpoint = build_hatena_service_endpoint()
+    if not entry_endpoint or not service_endpoint:
+        print("WARNING hatena: skipped post because endpoint could not be built")
         return
 
     title = f"【プロテイン価格ランキング】{jst_today_str()}"
@@ -170,14 +214,21 @@ def post_top3_to_hatena(markdown_body: str) -> None:
 
     try:
         resp = requests.post(
-            HATENA_BLOG_ATOM_ENDPOINT,
+            entry_endpoint,
             data=atom_xml.encode("utf-8"),
             auth=(HATENA_ID, HATENA_API_KEY),
             headers={"Content-Type": "application/xml; charset=utf-8"},
             timeout=30,
         )
-        resp.raise_for_status()
-        print(f"INFO hatena: draft post succeeded status={resp.status_code}")
+        if resp.status_code >= 400:
+            body_preview = (resp.text or "")[:500].replace("\n", " ").strip()
+            print(
+                f"ERROR hatena: draft post failed status={resp.status_code} endpoint={entry_endpoint} body={body_preview}"
+            )
+            if resp.status_code == 404:
+                log_hatena_service_document((HATENA_ID, HATENA_API_KEY), service_endpoint)
+            return
+        print(f"INFO hatena: draft post succeeded status={resp.status_code} endpoint={entry_endpoint}")
     except Exception:
         print("ERROR hatena: failed to post top3 draft")
         traceback.print_exc()
@@ -426,8 +477,6 @@ def looks_like_garbage(item_name: str) -> bool:
     name = item_name or ""
     return any(k in name for k in EXCLUDE_KEYWORDS)
     
-import re
-
 def _norm_name(s: str) -> str:
     s = (s or "").lower()
     # 全角数字→半角
