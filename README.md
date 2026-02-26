@@ -63,3 +63,21 @@ HATENA_ID=naoki1978
 HATENA_BLOG_ID=protain-hunter.hatenablog.com
 # HATENA_API_KEY=xxxxxxxx
 ```
+
+
+## 収益最大化モード（エクスプロージョン3kg専用）
+
+このジョブは `Master_List` から **エクスプロージョン3kg** のみを対象にして、毎回以下を実施します。
+
+- 前日比（円・％）を算出
+- 過去30日最安を判定
+- 価格変動レベルを3段階で分類
+  - `normal`
+  - `drop`（-3% or -300円）
+  - `big_drop`（-5% or -500円 or 30日最安）
+- レベル別CTAテンプレートを生成
+- X投稿文案を自動生成
+- はてな投稿用Markdownを自動生成
+- Discordに投稿案を通知
+
+過度な煽りは避けつつ、価格下落時の緊急性を明確に出す設計です。
