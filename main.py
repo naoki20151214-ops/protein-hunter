@@ -273,23 +273,16 @@ def rakuten_search_page(keyword: str, page: int, hits: int) -> List[Dict[str, An
         "sort": "+itemPrice",
         "format": "json",
         "formatVersion": 2,
-        "elements": ",".join([
-            "itemCode",
-            "itemName",
-            "itemPrice",
-            "itemUrl",
-            "shopName",
-            "postageFlag",
-            "pointRate",
-        ]),
     }
     if RAKUTEN_AFFILIATE_ID:
         params["affiliateId"] = RAKUTEN_AFFILIATE_ID
 
     resp = requests.get(RAKUTEN_ENDPOINT, params=params, timeout=30)
-    resp.raise_for_status()
-    print("DEBUG http:", resp.status_code, "keys:", list(data.keys())[:10])
-    data = resp.json()
+resp.raise_for_status()
+
+data = resp.json()
+
+print("DEBUG http:", resp.status_code, "keys:", list(data.keys())[:10])
 
         # formatVersion=2 style
     if isinstance(data, dict) and data.get("items"):
