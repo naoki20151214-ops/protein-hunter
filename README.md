@@ -41,3 +41,15 @@
 - `SHEET_ID`
 - `GSPREAD_SERVICE_ACCOUNT_JSON_B64`
 - `STRICT_MODE`（任意、`true/false`）
+- `HATENA_ID`（任意、はてなブログBasic認証ユーザー）
+- `HATENA_API_KEY`（任意、はてなブログAPIキー）
+
+## はてなブログ下書き投稿
+
+ジョブ完了後、各 `canonical_id` の当日最安オファーを実質コストで並べ、TOP3ランキング記事を下書きで投稿します。
+
+- POST先: `https://blog.hatena.ne.jp/naoki1978/protein-hunter.hatenablog.com/atom/entry`
+- タイトル形式: `【プロテイン価格ランキング】YYYY-MM-DD`
+- 本文: TOP3ランキングMarkdown
+- 認証: Basic認証（`HATENA_ID` + `HATENA_API_KEY`）
+- 失敗時: エラーログを出力し、既存の価格収集処理は継続
