@@ -127,22 +127,30 @@ def load_service_account_dict_b64() -> dict:
     return json.loads(raw)
 
 def open_sheets():
+    masked_sheet_id = f"{SHEET_ID[:4]}...{SHEET_ID[-4:]}" if len(SHEET_ID) >= 8 else "(masked)"
+    print(f"DEBUG sheet: opening sheet... sheet_id={masked_sheet_id}")
     creds_dict = load_service_account_dict_b64()
     gc = gspread.service_account_from_dict(creds_dict)
+    print("DEBUG sheet: gspread authentication success")
     sh = gc.open_by_key(SHEET_ID)
 
     master_ws = sh.worksheet("Master_List")
+    print(f"DEBUG sheet: worksheet name={master_ws.title}")
     hist_ws = sh.worksheet("Price_History")
+    print(f"DEBUG sheet: worksheet name={hist_ws.title}")
 
     # Min_Summary worksheet (create if missing)
     try:
         min_ws = sh.worksheet("Min_Summary")
+        print(f"DEBUG sheet: worksheet name={min_ws.title}")
     except gspread.exceptions.WorksheetNotFound:
+        print("DEBUG sheet: worksheet name=Min_Summary (not found, creating)")
         min_ws = sh.add_worksheet(title="Min_Summary", rows=2000, cols=10)
         min_ws.append_row(
             ["date", "canonical_id", "min_cost", "min_shop", "min_url", "updated_at"],
             value_input_option="RAW",
         )
+        print(f"DEBUG sheet: worksheet name={min_ws.title} (created)")
 
     return master_ws, hist_ws, min_ws
 
@@ -204,7 +212,14 @@ def append_history(hist_ws, offer_rows: List[OfferRow]) -> None:
         ]
         for o in offer_rows
     ]
-    hist_ws.append_rows(values, value_input_option="RAW")
+    print(f"DEBUG sheet: appending {len(values)} rows")
+    try:
+        hist_ws.append_rows(values, value_input_option="RAW")
+    except Exception:
+        print("ERROR sheet: append_rows failed")
+        traceback.print_exc()
+        raise
+    print("DEBUG sheet: append success")
 
 def read_min_summary(min_ws, target_date: str) -> Dict[str, Tuple[float, str, str]]:
     rows = min_ws.get_all_records()
