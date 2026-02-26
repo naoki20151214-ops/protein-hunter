@@ -291,10 +291,27 @@ def rakuten_search_page(keyword: str, page: int, hits: int) -> List[Dict[str, An
     print("DEBUG http:", resp.status_code, "keys:", list(data.keys())[:10])
     data = resp.json()
 
+        # formatVersion=2 style
     if isinstance(data, dict) and data.get("items"):
         return data["items"]
+
+    # old style variants
     if isinstance(data, dict) and data.get("Items"):
-        return [x.get("Item") for x in data["Items"] if x.get("Item")]
+        items = data["Items"]
+        if not items:
+            return []
+        first = items[0]
+        # {"Items":[{"Item":{...}}, ...]}
+        if isinstance(first, dict) and "Item" in first:
+            return [x["Item"] for x in items if isinstance(x, dict) and "Item" in x]
+        # {"Items":[{...}, ...]}  ← こっちもある
+        if isinstance(first, dict):
+            return items
+
+    # API error payload
+    if isinstance(data, dict) and (data.get("error") or data.get("error_description")):
+        raise RuntimeError(f"Rakuten API error: {data.get('error')} {data.get('error_description')}")
+
     return []
     
 def rakuten_search_multi_pages(keyword: str, total_hits: int) -> List[Dict[str, Any]]:
