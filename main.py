@@ -331,7 +331,7 @@ def rakuten_search_multi_pages(keyword: str, total_hits: int) -> List[Dict[str, 
 def looks_like_garbage(item_name: str) -> bool:
     name = item_name or ""
     return any(k in name for k in EXCLUDE_KEYWORDS)
-
+    
 import re
 
 def _norm_name(s: str) -> str:
