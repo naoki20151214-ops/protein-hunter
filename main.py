@@ -108,6 +108,16 @@ def safe_int(x: Any, default: int = 0) -> int:
     except Exception:
         return default
 
+
+
+def missing_required_envs() -> List[str]:
+    required = {
+        "RAKUTEN_APP_ID": RAKUTEN_APP_ID,
+        "SHEET_ID": SHEET_ID,
+        "GSPREAD_SERVICE_ACCOUNT_JSON_B64": GSPREAD_SERVICE_ACCOUNT_JSON_B64,
+    }
+    return [name for name, value in required.items() if not value]
+
 def discord_notify(title: str, lines: List[str]) -> None:
     if not DISCORD_WEBHOOK_URL:
         return
@@ -278,13 +288,13 @@ def rakuten_search_page(keyword: str, page: int, hits: int) -> List[Dict[str, An
         params["affiliateId"] = RAKUTEN_AFFILIATE_ID
 
     resp = requests.get(RAKUTEN_ENDPOINT, params=params, timeout=30)
-resp.raise_for_status()
+    resp.raise_for_status()
 
-data = resp.json()
+    data = resp.json()
 
-print("DEBUG http:", resp.status_code, "keys:", list(data.keys())[:10])
+    print("DEBUG http:", resp.status_code, "keys:", list(data.keys())[:10])
 
-        # formatVersion=2 style
+    # formatVersion=2 style
     if isinstance(data, dict) and data.get("items"):
         return data["items"]
 
@@ -421,6 +431,10 @@ def main():
     print("ACCESS_KEY len:", len(os.environ.get("RAKUTEN_ACCESS_KEY","")))
     print("APP_ID:", os.environ.get("RAKUTEN_APP_ID", "")[:6], "len=", len(os.environ.get("RAKUTEN_APP_ID","")))
     print("ENDPOINT:", RAKUTEN_ENDPOINT)
+
+    missing_envs = missing_required_envs()
+    if missing_envs:
+        raise RuntimeError(f"Missing required environment variables: {', '.join(missing_envs)}")
     today = jst_today_str()
     yesterday = (jst_date() - timedelta(days=1)).isoformat()
 
