@@ -129,6 +129,14 @@ def discord_notify(title: str, lines: List[str]) -> None:
         traceback.print_exc()
 
 
+@dataclass
+class HatenaPostResult:
+    ok: bool
+    status_code: Optional[int]
+    endpoint: str
+    message: str
+
+
 def build_hatena_service_endpoint() -> Optional[str]:
     if not HATENA_ID or not HATENA_BLOG_ID:
         return None
@@ -189,16 +197,18 @@ def build_top3_markdown(best_offers: List[OfferRow]) -> str:
     return "\n".join(lines).strip()
 
 
-def post_top3_to_hatena(markdown_body: str) -> None:
+def post_top3_to_hatena(markdown_body: str) -> HatenaPostResult:
     if not HATENA_ID or not HATENA_API_KEY or not HATENA_BLOG_ID:
-        print("WARNING hatena: skipped post because HATENA_ID/HATENA_API_KEY/HATENA_BLOG_ID is missing")
-        return
+        msg = "skipped post because HATENA_ID/HATENA_API_KEY/HATENA_BLOG_ID is missing"
+        print(f"WARNING hatena: {msg}")
+        return HatenaPostResult(ok=False, status_code=None, endpoint="", message=msg)
 
     entry_endpoint = build_hatena_entry_endpoint()
     service_endpoint = build_hatena_service_endpoint()
     if not entry_endpoint or not service_endpoint:
-        print("WARNING hatena: skipped post because endpoint could not be built")
-        return
+        msg = "skipped post because endpoint could not be built"
+        print(f"WARNING hatena: {msg}")
+        return HatenaPostResult(ok=False, status_code=None, endpoint="", message=msg)
 
     title = f"【プロテイン価格ランキング】{jst_today_str()}"
     atom_xml = f"""<?xml version=\"1.0\" encoding=\"utf-8\"?>
@@ -213,6 +223,7 @@ def post_top3_to_hatena(markdown_body: str) -> None:
 """
 
     try:
+        print(f"INFO hatena: posting draft endpoint={entry_endpoint}")
         resp = requests.post(
             entry_endpoint,
             data=atom_xml.encode("utf-8"),
@@ -220,18 +231,21 @@ def post_top3_to_hatena(markdown_body: str) -> None:
             headers={"Content-Type": "application/xml; charset=utf-8"},
             timeout=30,
         )
+        print(f"INFO hatena: draft post response status={resp.status_code} endpoint={entry_endpoint}")
         if resp.status_code >= 400:
             body_preview = (resp.text or "")[:500].replace("\n", " ").strip()
-            print(
-                f"ERROR hatena: draft post failed status={resp.status_code} endpoint={entry_endpoint} body={body_preview}"
-            )
+            msg = f"draft post failed body={body_preview}"
+            print(f"ERROR hatena: {msg} status={resp.status_code} endpoint={entry_endpoint}")
             if resp.status_code == 404:
                 log_hatena_service_document((HATENA_ID, HATENA_API_KEY), service_endpoint)
-            return
+            return HatenaPostResult(ok=False, status_code=resp.status_code, endpoint=entry_endpoint, message=msg)
         print(f"INFO hatena: draft post succeeded status={resp.status_code} endpoint={entry_endpoint}")
-    except Exception:
-        print("ERROR hatena: failed to post top3 draft")
+        return HatenaPostResult(ok=True, status_code=resp.status_code, endpoint=entry_endpoint, message="draft post succeeded")
+    except Exception as e:
+        msg = f"failed to post top3 draft: {e}"
+        print(f"ERROR hatena: {msg} endpoint={entry_endpoint}")
         traceback.print_exc()
+        return HatenaPostResult(ok=False, status_code=None, endpoint=entry_endpoint, message=msg)
 
 
 # =========================
@@ -596,6 +610,7 @@ def main():
     all_offers: List[OfferRow] = []
     notify_payloads: List[Tuple[str, List[str]]] = []
     best_offers_for_ranking: List[OfferRow] = []
+    run_errors: List[str] = []
 
     for m in masters:
         time.sleep(REQUEST_SLEEP_SEC)
@@ -703,7 +718,29 @@ def main():
     # Post Top3 ranking to Hatena Blog (draft)
     best_offers_for_ranking.sort(key=lambda x: x.protein_cost)
     ranking_markdown = build_top3_markdown(best_offers_for_ranking)
-    post_top3_to_hatena(ranking_markdown)
+    hatena_result = post_top3_to_hatena(ranking_markdown)
+    if not hatena_result.ok:
+        run_errors.append(
+            f"Hatena draft post failed (status={hatena_result.status_code}, endpoint={hatena_result.endpoint}): {hatena_result.message}"
+        )
+
+    summary_lines = [
+        f"- date: {today}",
+        f"- appended rows: {len(all_offers)}",
+        f"- change notifications: {len(notify_payloads)}",
+        f"- hatena status: {'OK' if hatena_result.ok else 'NG'}",
+        f"- hatena endpoint: {hatena_result.endpoint or '(not built)'}",
+        f"- hatena http_status: {hatena_result.status_code if hatena_result.status_code is not None else 'N/A'}",
+    ]
+    if run_errors:
+        summary_lines.append("- errors:")
+        for err in run_errors:
+            summary_lines.append(f"  - {err[:300]}")
+
+    discord_notify("📊 Rakuten protein tracker summary", summary_lines)
+
+    if run_errors:
+        raise RuntimeError("; ".join(run_errors))
 
     print(f"OK: appended {len(all_offers)} rows, notified {len(notify_payloads)} items.")
 
