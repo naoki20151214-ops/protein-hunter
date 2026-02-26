@@ -288,6 +288,7 @@ def rakuten_search_page(keyword: str, page: int, hits: int) -> List[Dict[str, An
 
     resp = requests.get(RAKUTEN_ENDPOINT, params=params, timeout=30)
     resp.raise_for_status()
+    print("DEBUG http:", resp.status_code, "keys:", list(data.keys())[:10])
     data = resp.json()
 
     if isinstance(data, dict) and data.get("items"):
