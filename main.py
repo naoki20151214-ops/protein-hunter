@@ -266,11 +266,22 @@ def rakuten_search_page(keyword: str, page: int, hits: int) -> List[Dict[str, An
         raise RuntimeError("Missing RAKUTEN_APP_ID")
 
     params = {
-    "applicationId": RAKUTEN_APP_ID,
-    "keyword": keyword,
-    "hits": max(1, min(30, hits)),
-    "page": page,
-    "format": "json",
+        "applicationId": RAKUTEN_APP_ID,
+        "keyword": keyword,
+        "hits": max(1, min(30, hits)),
+        "page": page,
+        "sort": "+itemPrice",
+        "format": "json",
+        "formatVersion": 2,
+        "elements": ",".join([
+            "itemCode",
+            "itemName",
+            "itemPrice",
+            "itemUrl",
+            "shopName",
+            "postageFlag",
+            "pointRate",
+        ]),
     }
     if RAKUTEN_AFFILIATE_ID:
         params["affiliateId"] = RAKUTEN_AFFILIATE_ID
@@ -279,14 +290,10 @@ def rakuten_search_page(keyword: str, page: int, hits: int) -> List[Dict[str, An
     resp.raise_for_status()
     data = resp.json()
 
-    # formatVersion=2 style
     if isinstance(data, dict) and data.get("items"):
         return data["items"]
-
-    # old style (Items → Item)
     if isinstance(data, dict) and data.get("Items"):
         return [x.get("Item") for x in data["Items"] if x.get("Item")]
-
     return []
 
 def rakuten_search_multi_pages(keyword: str, total_hits: int) -> List[Dict[str, Any]]:
