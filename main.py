@@ -332,7 +332,7 @@ def rakuten_search_multi_pages(keyword: str, total_hits: int) -> List[Dict[str, 
         # be gentle
         time.sleep(0.3)
 　　　print("keyword:", m.search_keyword, "items:", len(items), "sample:", str(items[0].get("itemName",""))[:60] if items else "NONE")
-    return all_items
+return all_items
 
 
 # =========================
