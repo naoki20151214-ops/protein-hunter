@@ -34,6 +34,7 @@ FETCH_HITS = int(os.environ.get("FETCH_HITS", "100"))     # total offers fetched
 STORE_HITS = int(os.environ.get("STORE_HITS", "20"))      # offers stored per canonical_id
 
 REQUEST_SLEEP_SEC = float(os.environ.get("REQUEST_SLEEP_SEC", "1.0"))
+STRICT_MODE = os.environ.get("STRICT_MODE", "false").strip().lower() in {"1", "true", "yes", "on"}
 
 # Optional extra point boost (Phase2). Example: 0.02 for +2%
 EXTRA_POINT_RATE = float(os.environ.get("EXTRA_POINT_RATE", "0.0"))  # 0.0..1.0
@@ -261,7 +262,7 @@ def upsert_today_min(min_ws, date: str, cid: str, min_cost: float, min_shop: str
 # =========================
 # Rakuten API
 # =========================
-def rakuten_search_page(keyword: str, page: int, hits: int) -> List[Dict[str, Any]]:
+def rakuten_search_page(keyword: str, page: int, hits: int) -> Tuple[List[Dict[str, Any]], int]:
     if not RAKUTEN_APP_ID:
         raise RuntimeError("Missing RAKUTEN_APP_ID")
 
@@ -278,15 +279,17 @@ def rakuten_search_page(keyword: str, page: int, hits: int) -> List[Dict[str, An
         params["affiliateId"] = RAKUTEN_AFFILIATE_ID
 
     resp = requests.get(RAKUTEN_ENDPOINT, params=params, timeout=30)
-resp.raise_for_status()
+    resp.raise_for_status()
 
-data = resp.json()
+    data = resp.json()
 
-print("DEBUG http:", resp.status_code, "keys:", list(data.keys())[:10])
+    print("DEBUG http:", resp.status_code, "keys:", list(data.keys())[:10])
 
-        # formatVersion=2 style
+    total_count = safe_int(data.get("count", 0), 0) if isinstance(data, dict) else 0
+
+    # formatVersion=2 style
     if isinstance(data, dict) and data.get("items"):
-        return data["items"]
+        return data["items"], total_count
 
     # old style variants
     if isinstance(data, dict) and data.get("Items"):
@@ -296,25 +299,28 @@ print("DEBUG http:", resp.status_code, "keys:", list(data.keys())[:10])
         first = items[0]
         # {"Items":[{"Item":{...}}, ...]}
         if isinstance(first, dict) and "Item" in first:
-            return [x["Item"] for x in items if isinstance(x, dict) and "Item" in x]
+            return [x["Item"] for x in items if isinstance(x, dict) and "Item" in x], total_count
         # {"Items":[{...}, ...]}  ← こっちもある
         if isinstance(first, dict):
-            return items
+            return items, total_count
 
     # API error payload
     if isinstance(data, dict) and (data.get("error") or data.get("error_description")):
         raise RuntimeError(f"Rakuten API error: {data.get('error')} {data.get('error_description')}")
 
-    return []
+    return [], total_count
     
-def rakuten_search_multi_pages(keyword: str, total_hits: int) -> List[Dict[str, Any]]:
+def rakuten_search_multi_pages(keyword: str, total_hits: int) -> Tuple[List[Dict[str, Any]], int]:
     all_items: List[Dict[str, Any]] = []
     remaining = total_hits
     page = 1
+    api_total_count = 0
 
     while remaining > 0:
         hits = min(30, remaining)
-        items = rakuten_search_page(keyword, page=page, hits=hits)
+        items, total_count = rakuten_search_page(keyword, page=page, hits=hits)
+        if page == 1:
+            api_total_count = total_count
         if not items:
             break
 
@@ -330,7 +336,7 @@ def rakuten_search_multi_pages(keyword: str, total_hits: int) -> List[Dict[str, 
 
         time.sleep(0.3)
 
-    return all_items
+    return all_items, api_total_count
 
 # =========================
 # Filtering / Compute
@@ -414,6 +420,30 @@ def compute_offer(master: MasterItem, item: Dict[str, Any]) -> Optional[OfferRow
     )
 
 
+def classify_item_filter(master: MasterItem, item: Dict[str, Any], seen_keys: set) -> Tuple[Optional[OfferRow], Optional[str]]:
+    item_code = str(item.get("itemCode", "")).strip()
+    shop_name = str(item.get("shopName", "")).strip()
+    raw_price = safe_int(item.get("itemPrice", 0), 0)
+    item_name = str(item.get("itemName", "")).strip()
+
+    if not item_code or not shop_name or raw_price <= 0:
+        return None, "missing_required_or_invalid_price"
+    if looks_like_garbage(item_name):
+        return None, "excluded_keyword"
+    if not capacity_strict_match(master, item_name):
+        return None, "capacity_mismatch"
+
+    offer = compute_offer(master, item)
+    if not offer:
+        return None, "invalid_offer"
+
+    key = (offer.date, offer.canonical_id, offer.item_code, offer.shop_name)
+    if key in seen_keys:
+        return None, "duplicate"
+
+    return offer, None
+
+
 # =========================
 # Main
 # =========================
@@ -440,22 +470,47 @@ def main():
         time.sleep(REQUEST_SLEEP_SEC)
 
         # Fetch many, then compute effective cost and keep best STORE_HITS
-        items = rakuten_search_multi_pages(m.search_keyword, total_hits=FETCH_HITS)
-        print("DEBUG keyword:", m.search_keyword, "fetched:", len(items),
-      "sample:", (items[0].get("itemName","")[:60] if items else "NONE"))
+        items, api_total_count = rakuten_search_multi_pages(m.search_keyword, total_hits=FETCH_HITS)
+        print(
+            "DEBUG fetch:",
+            f"canonical_id={m.canonical_id}",
+            f"keyword={m.search_keyword}",
+            f"api_total_count={api_total_count}",
+            f"fetched_items={len(items)}",
+            f"sample={(items[0].get('itemName', '')[:60] if items else 'NONE')}",
+        )
 
         seen = set()  # (date,cid,item_code,shop_name)
         offers_for_this: List[OfferRow] = []
+        filter_drop_counts: Dict[str, int] = {
+            "missing_required_or_invalid_price": 0,
+            "excluded_keyword": 0,
+            "capacity_mismatch": 0,
+            "invalid_offer": 0,
+            "duplicate": 0,
+        }
 
         for it in items:
-            offer = compute_offer(m, it)
+            offer, dropped_reason = classify_item_filter(m, it, seen)
             if not offer:
+                if dropped_reason:
+                    filter_drop_counts[dropped_reason] += 1
                 continue
             key = (offer.date, offer.canonical_id, offer.item_code, offer.shop_name)
-            if key in seen:
-                continue
             seen.add(key)
             offers_for_this.append(offer)
+
+        accepted_before_store_limit = len(offers_for_this)
+        dropped_by_store_limit = max(0, accepted_before_store_limit - STORE_HITS)
+        filter_drop_counts["store_hits_limit"] = dropped_by_store_limit
+
+        print(
+            "DEBUG filter:",
+            f"canonical_id={m.canonical_id}",
+            f"input_items={len(items)}",
+            f"accepted_before_store_limit={accepted_before_store_limit}",
+            "drop_counts=" + json.dumps(filter_drop_counts, ensure_ascii=False),
+        )
 
         # Sort by effective cost (protein_cost) and keep top STORE_HITS
         offers_for_this.sort(key=lambda x: x.protein_cost)
@@ -500,6 +555,13 @@ def main():
                 notify_payloads.append((f"{title} {m.canonical_id} ({today})", lines))
 
     # Write to Price_History
+    print(f"DEBUG append: rows_to_append={len(all_offers)}")
+    if len(all_offers) == 0:
+        msg = "No offers to append after filtering."
+        if STRICT_MODE:
+            raise RuntimeError(f"STRICT_MODE=true: {msg}")
+        print(f"WARNING: {msg} STRICT_MODE=false so run is treated as success.")
+
     append_history(hist_ws, all_offers)
 
     # Send notifications
