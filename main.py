@@ -137,6 +137,20 @@ class HatenaPostResult:
     message: str
 
 
+@dataclass
+class PriceChangeReport:
+    level: str
+    today_price: int
+    yesterday_price: Optional[int]
+    diff_yen: Optional[int]
+    diff_pct: Optional[float]
+    is_30d_low: bool
+    min_30d_price: Optional[int]
+    cta_text: str
+    x_text: str
+    hatena_markdown: str
+
+
 def build_hatena_service_endpoint() -> Optional[str]:
     if not HATENA_ID or not HATENA_BLOG_ID:
         return None
@@ -200,6 +214,131 @@ def build_top3_markdown(best_offers: List[OfferRow]) -> str:
     lines.extend(["---", "", "※ このフォーマットははてなブログAtomPub投稿用です。"])
 
     return "\n".join(lines).strip()
+
+
+def is_explosion_3kg_target(master: MasterItem) -> bool:
+    cid = (master.canonical_id or "").lower()
+    kw = (master.search_keyword or "").lower()
+    brand = (master.brand or "").lower()
+    name_hit = "explosion" in cid or "explosion" in kw or "エクスプロージョン" in master.search_keyword or "エクスプロージョン" in master.brand
+    return name_hit and abs(master.capacity_kg - 3.0) < 1e-9
+
+
+def read_price_history_daily_min(hist_ws, canonical_id: str) -> Dict[str, int]:
+    rows = hist_ws.get_all_records()
+    out: Dict[str, int] = {}
+    for r in rows:
+        cid = str(r.get("canonical_id", "")).strip()
+        if cid != canonical_id:
+            continue
+        day = str(r.get("date", "")).strip()
+        if not day:
+            continue
+        raw_price = safe_int(r.get("raw_price", math.inf), math.inf)
+        if raw_price == math.inf:
+            continue
+        prev = out.get(day)
+        if prev is None or raw_price < prev:
+            out[day] = raw_price
+    return out
+
+
+def choose_level(diff_yen: Optional[int], diff_pct: Optional[float], is_30d_low: bool) -> str:
+    if is_30d_low:
+        return "big_drop"
+    if diff_yen is None or diff_pct is None:
+        return "normal"
+    if diff_pct <= -5.0 or diff_yen <= -500:
+        return "big_drop"
+    if diff_pct <= -3.0 or diff_yen <= -300:
+        return "drop"
+    return "normal"
+
+
+def cta_by_level(level: str) -> str:
+    templates = {
+        "normal": "価格推移を見ながら、ポイント還元が強い日に狙うのがおすすめです。",
+        "drop": "直近でしっかり下がっています。必要量が決まっているなら、今のうちに確保を検討。",
+        "big_drop": "大きめの値下げシグナルです。売り切れ・還元終了前に早めのチェック推奨。",
+    }
+    return templates.get(level, templates["normal"])
+
+
+def build_marketing_report(master: MasterItem, best_offer: OfferRow, hist_ws, today: str, yesterday: str) -> PriceChangeReport:
+    daily_min = read_price_history_daily_min(hist_ws, master.canonical_id)
+    today_price = best_offer.raw_price
+    yesterday_price = daily_min.get(yesterday)
+
+    diff_yen: Optional[int] = None
+    diff_pct: Optional[float] = None
+    if yesterday_price and yesterday_price > 0:
+        diff_yen = today_price - yesterday_price
+        diff_pct = (diff_yen / yesterday_price) * 100.0
+
+    start_date = (jst_date() - timedelta(days=29)).isoformat()
+    recent_prices = [p for d, p in daily_min.items() if start_date <= d <= today]
+    if recent_prices:
+        min_30d_price = min(recent_prices)
+        is_30d_low = today_price <= min_30d_price
+    else:
+        min_30d_price = None
+        is_30d_low = False
+
+    level = choose_level(diff_yen, diff_pct, is_30d_low)
+    cta_text = cta_by_level(level)
+
+    diff_label = (
+        f"前日比 {diff_yen:+,}円 ({diff_pct:+.1f}%)"
+        if diff_yen is not None and diff_pct is not None
+        else "前日比 データ不足"
+    )
+    low30_label = f"30日最安 {min_30d_price:,}円" if min_30d_price is not None else "30日最安 データ不足"
+
+    x_text = "\n".join(
+        [
+            "【Rakuten Protein Tracker】",
+            "エクスプロージョン 3kg 価格チェック",
+            f"今日の最安: {today_price:,}円",
+            diff_label,
+            f"変動レベル: {level}",
+            f"{low30_label} / {'更新' if is_30d_low else '未更新'}",
+            cta_text,
+            best_offer.item_url,
+            "#楽天市場 #プロテイン #エクスプロージョン",
+        ]
+    )
+
+    hatena_markdown = "\n".join(
+        [
+            f"## エクスプロージョン3kg 価格速報（{today}）",
+            "",
+            f"- 今日の最安価格: **{today_price:,}円**",
+            f"- {diff_label}",
+            f"- 30日最安: **{f'{min_30d_price:,}円' if min_30d_price is not None else 'データ不足'}**",
+            f"- 変動レベル: **{level}**",
+            "",
+            f"### CTA\n{cta_text}",
+            "",
+            f"- 商品名: {best_offer.item_name}",
+            f"- ショップ: {best_offer.shop_name}",
+            f"- 楽天リンク: {best_offer.item_url}",
+            "",
+            "※ 本記事は価格追跡データに基づく投稿案です。過度な煽りを避け、価格と還元条件を確認してご判断ください。",
+        ]
+    )
+
+    return PriceChangeReport(
+        level=level,
+        today_price=today_price,
+        yesterday_price=yesterday_price,
+        diff_yen=diff_yen,
+        diff_pct=diff_pct,
+        is_30d_low=is_30d_low,
+        min_30d_price=min_30d_price,
+        cta_text=cta_text,
+        x_text=x_text,
+        hatena_markdown=hatena_markdown,
+    )
 
 
 def post_top3_to_hatena(markdown_body: str) -> HatenaPostResult:
@@ -608,6 +747,10 @@ def main():
     if not masters:
         raise RuntimeError("Master_List is empty or missing required columns.")
 
+    masters = [m for m in masters if is_explosion_3kg_target(m)]
+    if not masters:
+        raise RuntimeError("Target product (エクスプロージョン3kg) not found in Master_List.")
+
     # Read minima from Min_Summary only (fast)
     yday_min = read_min_summary(min_ws, yesterday)   # {cid: (cost, shop, url)}
     alltime_min = read_alltime_min(min_ws)          # {cid: (cost, shop, url)}
@@ -615,6 +758,7 @@ def main():
     all_offers: List[OfferRow] = []
     notify_payloads: List[Tuple[str, List[str]]] = []
     best_offers_for_ranking: List[OfferRow] = []
+    marketing_reports: List[Tuple[MasterItem, OfferRow, PriceChangeReport]] = []
     run_errors: List[str] = []
 
     for m in masters:
@@ -675,6 +819,7 @@ def main():
             best = offers_for_this[0]
             best_offers_for_ranking.append(best)
             upsert_today_min(min_ws, today, m.canonical_id, best.protein_cost, best.shop_name, best.item_url)
+            marketing_reports.append((m, best, build_marketing_report(m, best, hist_ws, today, yesterday)))
 
             y_best = yday_min.get(m.canonical_id)
             a_best = alltime_min.get(m.canonical_id)
@@ -720,19 +865,42 @@ def main():
     for title, lines in notify_payloads:
         discord_notify(title, lines)
 
-    # Post Top3 ranking to Hatena Blog (draft)
-    best_offers_for_ranking.sort(key=lambda x: x.protein_cost)
-    ranking_markdown = build_top3_markdown(best_offers_for_ranking)
-    hatena_result = post_top3_to_hatena(ranking_markdown)
-    if not hatena_result.ok:
-        run_errors.append(
-            f"Hatena draft post failed (status={hatena_result.status_code}, endpoint={hatena_result.endpoint}): {hatena_result.message}"
+    # Generate and notify revenue-maximized posting drafts for Explosion 3kg
+    hatena_result = HatenaPostResult(ok=True, status_code=None, endpoint="", message="skipped")
+    for m, best, report in marketing_reports:
+        diff_line = (
+            f"{report.diff_yen:+,}円 ({report.diff_pct:+.1f}%)"
+            if report.diff_yen is not None and report.diff_pct is not None
+            else "データ不足"
         )
+        lines = [
+            f"- product: {m.canonical_id} / エクスプロージョン3kg",
+            f"- today: {report.today_price:,}円",
+            f"- 前日比: {diff_line}",
+            f"- 30日最安: {'更新' if report.is_30d_low else '未更新'}"
+            + (f" ({report.min_30d_price:,}円)" if report.min_30d_price is not None else ""),
+            f"- level: {report.level}",
+            f"- CTA: {report.cta_text}",
+            "",
+            "[X投稿案]",
+            report.x_text,
+            "",
+            "[Hatena投稿Markdown案]",
+            report.hatena_markdown[:1200],
+        ]
+        discord_notify("📝 投稿案通知（Rakuten Protein Tracker）", lines)
+
+        hatena_result = post_top3_to_hatena(report.hatena_markdown)
+        if not hatena_result.ok:
+            run_errors.append(
+                f"Hatena draft post failed (status={hatena_result.status_code}, endpoint={hatena_result.endpoint}): {hatena_result.message}"
+            )
 
     summary_lines = [
         f"- date: {today}",
         f"- appended rows: {len(all_offers)}",
         f"- change notifications: {len(notify_payloads)}",
+        f"- marketing drafts: {len(marketing_reports)}",
         f"- hatena status: {'OK' if hatena_result.ok else 'NG'}",
         f"- hatena endpoint: {hatena_result.endpoint or '(not built)'}",
         f"- hatena http_status: {hatena_result.status_code if hatena_result.status_code is not None else 'N/A'}",
