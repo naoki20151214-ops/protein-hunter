@@ -266,22 +266,12 @@ def rakuten_search_page(keyword: str, page: int, hits: int) -> List[Dict[str, An
         raise RuntimeError("Missing RAKUTEN_APP_ID")
 
     params = {
-        "applicationId": RAKUTEN_APP_ID,
-        "keyword": keyword,
-        "hits": max(1, min(30, hits)),
-        "page": page,
-        "sort": "+itemPrice",
-        "format": "json",
-        "formatVersion": 2,
-        "elements": ",".join([
-            "itemCode",
-            "itemName",
-            "itemPrice",
-            "itemUrl",
-            "shopName",
-            "postageFlag",
-            "pointRate",
-        ]),
+    "applicationId": RAKUTEN_APP_ID,
+    "keyword": keyword,
+    "hits": max(1, min(30, hits)),
+    "page": page,
+    "format": "json",
+},
     }
     if RAKUTEN_AFFILIATE_ID:
         params["affiliateId"] = RAKUTEN_AFFILIATE_ID
