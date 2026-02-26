@@ -90,6 +90,7 @@ class OfferRow:
     protein_cost: float
     item_url: str
     item_name: str
+    image_url: str
 
 
 # =========================
@@ -103,6 +104,53 @@ def jst_today_str() -> str:
 
 def jst_now_iso() -> str:
     return datetime.now(ZoneInfo("Asia/Tokyo")).isoformat(timespec="seconds")
+
+
+def choose_variant_jst(now: Optional[datetime] = None) -> Tuple[str, str, str, str, str, str]:
+    dt = now.astimezone(ZoneInfo("Asia/Tokyo")) if now else datetime.now(ZoneInfo("Asia/Tokyo"))
+    weekday = dt.weekday()  # Mon=0..Sun=6
+    weekday_names = ["月", "火", "水", "木", "金", "土", "日"]
+
+    if weekday in {0, 2, 4}:  # Mon/Wed/Fri
+        return (
+            "A",
+            "今日が買い時",
+            "30日最安水準",
+            "補充する人は今日が安全。ポイント条件だけ確認してGO。",
+            dt.date().isoformat(),
+            weekday_names[weekday],
+        )
+    return (
+        "B",
+        "逃すと損しやすい水準",
+        "急落後は戻りやすい",
+        "この水準は長く続かないことが多い。売り切れ前に確認。",
+        dt.date().isoformat(),
+        weekday_names[weekday],
+    )
+
+
+def pick_best_image_url(item: Dict[str, Any]) -> str:
+    medium_images = item.get("mediumImageUrls") or []
+    if isinstance(medium_images, list) and medium_images:
+        image = medium_images[0]
+        if isinstance(image, dict) and image.get("imageUrl"):
+            return str(image.get("imageUrl", "")).strip()
+
+    small_images = item.get("smallImageUrls") or []
+    if isinstance(small_images, list) and small_images:
+        image = small_images[0]
+        if isinstance(image, dict) and image.get("imageUrl"):
+            return str(image.get("imageUrl", "")).strip()
+
+    return ""
+
+
+def shorten_item_name(name: str, limit: int = 40) -> str:
+    text = (name or "").strip()
+    if len(text) <= limit:
+        return text
+    return text[:limit] + "…"
 
 def safe_float(x: Any, default: float = 0.0) -> float:
     try:
@@ -146,7 +194,15 @@ class PriceChangeReport:
     diff_pct: Optional[float]
     is_30d_low: bool
     min_30d_price: Optional[int]
-    cta_text: str
+    variant: str
+    variant_headline: str
+    variant_reason: str
+    variant_push_text: str
+    date_jst: str
+    weekday_jst: str
+    image_url: str
+    image_selected: bool
+    short_item_name: str
     x_text: str
     hatena_markdown: str
 
@@ -255,15 +311,6 @@ def choose_level(diff_yen: Optional[int], diff_pct: Optional[float], is_30d_low:
     return "normal"
 
 
-def cta_by_level(level: str) -> str:
-    templates = {
-        "normal": "価格推移を見ながら、ポイント還元が強い日に狙うのがおすすめです。",
-        "drop": "直近でしっかり下がっています。必要量が決まっているなら、今のうちに確保を検討。",
-        "big_drop": "大きめの値下げシグナルです。売り切れ・還元終了前に早めのチェック推奨。",
-    }
-    return templates.get(level, templates["normal"])
-
-
 def build_marketing_report(master: MasterItem, best_offer: OfferRow, hist_ws, today: str, yesterday: str) -> PriceChangeReport:
     daily_min = read_price_history_daily_min(hist_ws, master.canonical_id)
     today_price = best_offer.raw_price
@@ -285,7 +332,8 @@ def build_marketing_report(master: MasterItem, best_offer: OfferRow, hist_ws, to
         is_30d_low = False
 
     level = choose_level(diff_yen, diff_pct, is_30d_low)
-    cta_text = cta_by_level(level)
+    variant, variant_headline, variant_reason, variant_push_text, date_jst, weekday_jst = choose_variant_jst()
+    short_name = shorten_item_name(best_offer.item_name)
 
     diff_label = (
         f"前日比 {diff_yen:+,}円 ({diff_pct:+.1f}%)"
@@ -293,6 +341,12 @@ def build_marketing_report(master: MasterItem, best_offer: OfferRow, hist_ws, to
         else "前日比 データ不足"
     )
     low30_label = f"30日最安 {min_30d_price:,}円" if min_30d_price is not None else "30日最安 データ不足"
+    diff_inline = (
+        f"{diff_yen:+,}円（{diff_pct:+.1f}%）"
+        if diff_yen is not None and diff_pct is not None
+        else "データ不足"
+    )
+    low30_flag = "更新" if is_30d_low else "未更新"
 
     x_text = "\n".join(
         [
@@ -301,29 +355,51 @@ def build_marketing_report(master: MasterItem, best_offer: OfferRow, hist_ws, to
             f"今日の最安: {today_price:,}円",
             diff_label,
             f"変動レベル: {level}",
-            f"{low30_label} / {'更新' if is_30d_low else '未更新'}",
-            cta_text,
+            f"{low30_label} / {low30_flag}",
+            variant_push_text,
             best_offer.item_url,
             "#楽天市場 #プロテイン #エクスプロージョン",
         ]
     )
 
+    image_block = f"![商品画像]({best_offer.image_url})" if best_offer.image_url else "商品画像はリンク先で確認"
+
     hatena_markdown = "\n".join(
         [
-            f"## エクスプロージョン3kg 価格速報（{today}）",
+            f"🔥 判定：{variant_headline}（{variant_reason}）",
+            f"実質：{today_price:,}円/kg｜前日比：{diff_inline}｜30日最安：{low30_flag}",
+            "👉 価格と在庫は下のボタンから確認",
             "",
-            f"- 今日の最安価格: **{today_price:,}円**",
-            f"- {diff_label}",
-            f"- 30日最安: **{f'{min_30d_price:,}円' if min_30d_price is not None else 'データ不足'}**",
-            f"- 変動レベル: **{level}**",
+            f"# エクスプロージョン3kg 価格速報（{today}）",
             "",
-            f"### CTA\n{cta_text}",
+            f"**{variant_headline}**",
             "",
-            f"- 商品名: {best_offer.item_name}",
+            f"- 今日最安: **{today_price:,}円/kg**",
+            f"- 前日比: **{diff_inline}**",
+            f"- 30日最安: **{low30_flag}**（{f'{min_30d_price:,}円' if min_30d_price is not None else 'データ不足'}）",
+            "",
+            image_block,
+            "",
+            "## 今日の結論",
+            f"- 判定: **{variant_headline}**",
+            f"- 理由: {variant_reason}",
+            "",
+            "## 価格データ",
+            f"- 商品名: {short_name}",
             f"- ショップ: {best_offer.shop_name}",
-            f"- 楽天リンク: {best_offer.item_url}",
+            f"- 今日の実質価格: **{today_price:,}円/kg**",
+            f"- 前日比: **{diff_inline}**",
+            f"- 30日最安: **{low30_flag}**（{f'{min_30d_price:,}円' if min_30d_price is not None else 'データ不足'}）",
             "",
-            "※ 本記事は価格追跡データに基づく投稿案です。過度な煽りを避け、価格と還元条件を確認してご判断ください。",
+            "## 買い時コメント",
+            variant_push_text,
+            "",
+            "## CTA",
+            "### ✅ 今すぐ確認",
+            f"**👉 [楽天で価格と在庫を確認する]({best_offer.item_url})**",
+            "",
+            "## 注意書き",
+            "※ 価格・ポイント・在庫は変動します。購入前に楽天の商品ページで最新情報をご確認ください。",
         ]
     )
 
@@ -335,7 +411,15 @@ def build_marketing_report(master: MasterItem, best_offer: OfferRow, hist_ws, to
         diff_pct=diff_pct,
         is_30d_low=is_30d_low,
         min_30d_price=min_30d_price,
-        cta_text=cta_text,
+        variant=variant,
+        variant_headline=variant_headline,
+        variant_reason=variant_reason,
+        variant_push_text=variant_push_text,
+        date_jst=date_jst,
+        weekday_jst=weekday_jst,
+        image_url=best_offer.image_url,
+        image_selected=bool(best_offer.image_url),
+        short_item_name=short_name,
         x_text=x_text,
         hatena_markdown=hatena_markdown,
     )
@@ -668,6 +752,7 @@ def compute_offer(master: MasterItem, item: Dict[str, Any]) -> Optional[OfferRow
     shop_name = str(item.get("shopName", "")).strip()
     item_url = str(item.get("itemUrl", "")).strip()
     item_name = str(item.get("itemName", "")).strip()
+    image_url = pick_best_image_url(item)
 
     raw_price = safe_int(item.get("itemPrice", 0), 0)
     if not item_code or not shop_name or raw_price <= 0:
@@ -705,6 +790,7 @@ def compute_offer(master: MasterItem, item: Dict[str, Any]) -> Optional[OfferRow
         protein_cost=protein_cost,
         item_url=item_url,
         item_name=item_name,
+        image_url=image_url,
     )
 
 
@@ -880,7 +966,8 @@ def main():
             f"- 30日最安: {'更新' if report.is_30d_low else '未更新'}"
             + (f" ({report.min_30d_price:,}円)" if report.min_30d_price is not None else ""),
             f"- level: {report.level}",
-            f"- CTA: {report.cta_text}",
+            f"- variant: {report.variant} ({report.date_jst} {report.weekday_jst})",
+            f"- image: {'採用' if report.image_selected else '未取得'}",
             "",
             "[X投稿案]",
             report.x_text,
@@ -889,6 +976,14 @@ def main():
             report.hatena_markdown[:1200],
         ]
         discord_notify("📝 投稿案通知（Rakuten Protein Tracker）", lines)
+
+        print(
+            "INFO marketing:",
+            f"variant={report.variant}",
+            f"date_jst={report.date_jst}",
+            f"weekday_jst={report.weekday_jst}",
+            f"image_url_status={'採用' if report.image_selected else '未取得'}",
+        )
 
         hatena_result = post_top3_to_hatena(report.hatena_markdown)
         if not hatena_result.ok:
