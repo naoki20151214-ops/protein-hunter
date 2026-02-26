@@ -434,6 +434,8 @@ def main():
 
         # Fetch many, then compute effective cost and keep best STORE_HITS
         items = rakuten_search_multi_pages(m.search_keyword, total_hits=FETCH_HITS)
+        print("DEBUG keyword:", m.search_keyword, "fetched:", len(items),
+      "sample:", (items[0].get("itemName","")[:60] if items else "NONE"))
 
         seen = set()  # (date,cid,item_code,shop_name)
         offers_for_this: List[OfferRow] = []
