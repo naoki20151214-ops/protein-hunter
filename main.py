@@ -271,7 +271,6 @@ def rakuten_search_page(keyword: str, page: int, hits: int) -> List[Dict[str, An
     "hits": max(1, min(30, hits)),
     "page": page,
     "format": "json",
-},
     }
     if RAKUTEN_AFFILIATE_ID:
         params["affiliateId"] = RAKUTEN_AFFILIATE_ID
