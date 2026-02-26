@@ -295,7 +295,15 @@ def rakuten_search_page(keyword: str, page: int, hits: int) -> List[Dict[str, An
     resp = requests.get(RAKUTEN_ENDPOINT, params=params, timeout=30)
     resp.raise_for_status()
     data = resp.json()
-    return data.get("items") or []
+    # formatVersion=2 style
+if isinstance(data, dict) and data.get("items"):
+    return data["items"]
+
+# old style (Items → Item)
+if isinstance(data, dict) and data.get("Items"):
+    return [x.get("Item") for x in data["Items"] if x.get("Item")]
+
+return []
 
 def rakuten_search_multi_pages(keyword: str, total_hits: int) -> List[Dict[str, Any]]:
     """
