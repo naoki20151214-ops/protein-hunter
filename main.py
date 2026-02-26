@@ -331,7 +331,7 @@ def rakuten_search_multi_pages(keyword: str, total_hits: int) -> List[Dict[str, 
 
         # be gentle
         time.sleep(0.3)
-
+　　　print("keyword:", m.search_keyword, "items:", len(items), "sample:", str(items[0].get("itemName",""))[:60] if items else "NONE")
     return all_items
 
 
@@ -344,27 +344,32 @@ def looks_like_garbage(item_name: str) -> bool:
 
 import re
 
+def _norm_name(s: str) -> str:
+    s = (s or "").lower()
+    # 全角数字→半角
+    s = s.translate(str.maketrans("０１２３４５６７８９", "0123456789"))
+    # 全角英字っぽいのを半角へ寄せる（最低限）
+    s = s.replace("ｋ", "k").replace("ｇ", "g").replace("Ｋ", "k").replace("Ｇ", "g")
+    # スペース類を消す
+    s = re.sub(r"\s+", "", s)
+    return s
+
 def capacity_strict_match(master: MasterItem, item_name: str) -> bool:
     if not STRICT_CAPACITY_MATCH:
         return True
     if master.capacity_kg <= 0:
         return True
 
-    name = item_name.lower()
-
-    # 全角数字→半角変換
-    name = name.translate(str.maketrans("０１２３４５６７８９", "0123456789"))
-
+    name = _norm_name(item_name)
     kg = master.capacity_kg
 
     if kg >= 1.0:
-        # 3kg, 3 kg, 3kg×1 など許可
-        pattern = rf"\b{int(round(kg))}\s?kg\b"
-        return re.search(pattern, name) is not None
+        n = int(round(kg))
+        # 例: 3kg / 3kg×1 / 3kgx1 / 3kg(〜) / 3kg入り などを許容
+        return re.search(rf"{n}kg($|[×x\(\)0-9]|入り|ﾊﾟｯｸ|袋|個)", name) is not None or f"{n}kg" in name
 
     grams = int(round(kg * 1000))
-    pattern = rf"\b{grams}\s?g\b"
-    return re.search(pattern, name) is not None
+    return re.search(rf"{grams}g($|[×x\(\)0-9]|入り|ﾊﾟｯｸ|袋|個)", name) is not None or f"{grams}g" in name
     
 def compute_offer(master: MasterItem, item: Dict[str, Any]) -> Optional[OfferRow]:
     date = jst_today_str()
