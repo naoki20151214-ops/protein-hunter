@@ -440,10 +440,11 @@ def post_top3_to_hatena(markdown_body: str) -> HatenaPostResult:
 
     title = f"【プロテイン価格ランキング】{jst_today_str()}"
     atom_xml = f"""<?xml version=\"1.0\" encoding=\"utf-8\"?>
-<entry xmlns=\"http://www.w3.org/2005/Atom\" xmlns:app=\"http://www.w3.org/2007/app\">
+<entry xmlns=\"http://www.w3.org/2005/Atom\" xmlns:app=\"http://www.w3.org/2007/app\" xmlns:hatena=\"http://www.hatena.ne.jp/info/xmlns#\">
   <title>{escape(title)}</title>
   <author><name>{escape(HATENA_ID)}</name></author>
-  <content type=\"text/x-markdown\">{escape(markdown_body)}</content>
+  <hatena:syntax>markdown</hatena:syntax>
+  <content type=\"text/plain\">{escape(markdown_body)}</content>
   <app:control>
     <app:draft>yes</app:draft>
   </app:control>
