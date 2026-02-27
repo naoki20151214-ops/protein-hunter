@@ -39,6 +39,8 @@ DEFAULT_SHIPPING_YEN = int(os.environ.get("DEFAULT_SHIPPING_YEN", "800"))
 # Fetch more than we store, to avoid missing effective cheapest offers
 FETCH_HITS = int(os.environ.get("FETCH_HITS", "100"))     # total offers fetched per canonical_id
 STORE_HITS = int(os.environ.get("STORE_HITS", "20"))      # offers stored per canonical_id
+RANKING_N = int(os.environ.get("RANKING_N", "20"))
+HERO_K = int(os.environ.get("HERO_K", "3"))
 
 REQUEST_SLEEP_SEC = float(os.environ.get("REQUEST_SLEEP_SEC", "1.0"))
 STRICT_MODE = os.environ.get("STRICT_MODE", "false").strip().lower() in {"1", "true", "yes", "on"}
@@ -343,7 +345,14 @@ def choose_level(diff_yen: Optional[int], diff_pct: Optional[float], is_30d_low:
     return "normal"
 
 
-def build_marketing_report(master: MasterItem, best_offer: OfferRow, hist_ws, today: str, yesterday: str) -> PriceChangeReport:
+def build_marketing_report(
+    master: MasterItem,
+    best_offer: OfferRow,
+    hist_ws,
+    today: str,
+    yesterday: str,
+    ranking_offers: Optional[List[OfferRow]] = None,
+) -> PriceChangeReport:
     daily_min = read_price_history_daily_min(hist_ws, master.canonical_id)
     today_price = best_offer.raw_price
     yesterday_price = daily_min.get(yesterday)
@@ -398,6 +407,42 @@ def build_marketing_report(master: MasterItem, best_offer: OfferRow, hist_ws, to
     if best_offer.image_url:
         image_block_lines = [f"![商品画像]({best_offer.image_url})", ""]
 
+    ranking_sections: List[str] = []
+    if ranking_offers is not None:
+        hero_offers = ranking_offers[:HERO_K]
+        top_offers = ranking_offers[:RANKING_N]
+
+        if hero_offers:
+            medals = ["🥇", "🥈", "🥉"]
+            ranking_sections.extend(["## 今日の推し（TOP3）", ""])
+            for i, offer in enumerate(hero_offers):
+                medal = medals[i] if i < len(medals) else "🏅"
+                point_pct = (offer.point_rate if offer.point_rate is not None else 0.0) * 100.0
+                ranking_sections.append(f"### {medal} {shorten_item_name(offer.item_name, 60)}")
+                if offer.image_url:
+                    ranking_sections.append(f"![商品画像]({offer.image_url})")
+                ranking_sections.extend(
+                    [
+                        f"- 実質単価: **{offer.protein_cost:,.0f}円/kg**",
+                        f"- 価格: {offer.raw_price:,}円（送料 {offer.shipping_cost:,}円）",
+                        f"- pt: {point_pct:.1f}%",
+                        f"- ショップ: {offer.shop_name or ''}",
+                    ]
+                )
+                if offer.item_url:
+                    ranking_sections.append(f"**👉 [楽天で価格と在庫を確認する]({offer.item_url})**")
+                ranking_sections.append("")
+
+        if top_offers:
+            ranking_sections.extend(["## 今日のランキング（TOP20）", ""])
+            for rank, offer in enumerate(top_offers, 1):
+                ranking_sections.append(
+                    f"- {rank}. {shorten_item_name(offer.item_name, 60)}｜**{offer.protein_cost:,.0f}円/kg**｜{offer.shop_name or ''}"
+                )
+                if offer.item_url:
+                    ranking_sections.append(f"  - 👉 {offer.item_url}")
+            ranking_sections.append("")
+
     hatena_markdown = "\n".join(
         image_block_lines + [
             f"🔥 判定：{variant_headline}（{variant_reason}）",
@@ -416,6 +461,7 @@ def build_marketing_report(master: MasterItem, best_offer: OfferRow, hist_ws, to
             f"- 判定: **{variant_headline}**",
             f"- 理由: {variant_reason}",
             "",
+        ] + ranking_sections + [
             "## 価格データ",
             f"- 商品名: {short_name}",
             f"- ショップ: {best_offer.shop_name}",
@@ -940,13 +986,19 @@ def main():
         # Determine today's best and upsert Min_Summary
         if offers_for_this:
             best = offers_for_this[0]
+            ranking_offers = offers_for_this[:RANKING_N]
             best_offers_for_ranking.append(best)
             if best.image_url:
                 print(f"INFO selected best_offer.image_url canonical_id={m.canonical_id} url={best.image_url}")
             else:
                 print(f"WARNING best_offer.image_url is empty canonical_id={m.canonical_id}")
+            print(
+                f"INFO ranking_count={len(ranking_offers)} hero_count={min(HERO_K, len(ranking_offers))} canonical_id={m.canonical_id}"
+            )
             upsert_today_min(min_ws, today, m.canonical_id, best.protein_cost, best.shop_name, best.item_url)
-            marketing_reports.append((m, best, build_marketing_report(m, best, hist_ws, today, yesterday)))
+            marketing_reports.append(
+                (m, best, build_marketing_report(m, best, hist_ws, today, yesterday, ranking_offers=ranking_offers))
+            )
 
             y_best = yday_min.get(m.canonical_id)
             a_best = alltime_min.get(m.canonical_id)
