@@ -130,23 +130,25 @@ def choose_variant_jst(now: Optional[datetime] = None) -> Tuple[str, str, str, s
     )
 
 
+def normalize_image_url(url: str) -> str:
+    image_url = (url or "").strip()
+    if not image_url:
+        return ""
+
+    if image_url.startswith("//"):
+        image_url = f"https:{image_url}"
+
+    image_url = re.sub(r"^http://", "https://", image_url, flags=re.IGNORECASE)
+
+    if re.search(r"([?&])_ex=\d+x\d+", image_url):
+        image_url = re.sub(r"([?&])_ex=\d+x\d+", r"\1_ex=600x600", image_url)
+    else:
+        image_url = f"{image_url}&_ex=600x600" if "?" in image_url else f"{image_url}?_ex=600x600"
+
+    return image_url
+
+
 def pick_best_image_url(item: Dict[str, Any]) -> str:
-    def normalize_image_url(url: str) -> str:
-        image_url = (url or "").strip()
-        if not image_url:
-            return ""
-
-        if image_url.startswith("//"):
-            image_url = f"https:{image_url}"
-
-        image_url = re.sub(r"^http://", "https://", image_url, flags=re.IGNORECASE)
-
-        if re.search(r"([?&])_ex=\d+x\d+", image_url):
-            image_url = re.sub(r"([?&])_ex=\d+x\d+", r"\1_ex=600x600", image_url)
-        else:
-            image_url = f"{image_url}&_ex=600x600" if "?" in image_url else f"{image_url}?_ex=600x600"
-
-        return image_url
 
     medium_images = item.get("mediumImageUrls") or []
     if isinstance(medium_images, list) and medium_images:
@@ -154,7 +156,6 @@ def pick_best_image_url(item: Dict[str, Any]) -> str:
         if isinstance(image, dict) and image.get("imageUrl"):
             selected_url = normalize_image_url(str(image.get("imageUrl", "")))
             if selected_url:
-                print(f"DEBUG selected_image_url: {selected_url}")
                 return selected_url
 
     small_images = item.get("smallImageUrls") or []
@@ -163,10 +164,8 @@ def pick_best_image_url(item: Dict[str, Any]) -> str:
         if isinstance(image, dict) and image.get("imageUrl"):
             selected_url = normalize_image_url(str(image.get("imageUrl", "")))
             if selected_url:
-                print(f"DEBUG selected_image_url: {selected_url}")
                 return selected_url
 
-    print("DEBUG no_image")
     return ""
 
 
@@ -386,12 +385,12 @@ def build_marketing_report(master: MasterItem, best_offer: OfferRow, hist_ws, to
         ]
     )
 
-    image_block = f"![商品画像]({best_offer.image_url})" if best_offer.image_url else "商品画像はリンク先で確認"
+    image_block_lines: List[str] = []
+    if best_offer.image_url:
+        image_block_lines = [f"![商品画像]({best_offer.image_url})", ""]
 
     hatena_markdown = "\n".join(
-        [
-            image_block,
-            "",
+        image_block_lines + [
             f"🔥 判定：{variant_headline}（{variant_reason}）",
             f"実質：{today_price:,}円/kg｜前日比：{diff_inline}｜30日最安：{low30_flag}",
             "👉 価格と在庫は下のボタンから確認",
@@ -929,6 +928,10 @@ def main():
         if offers_for_this:
             best = offers_for_this[0]
             best_offers_for_ranking.append(best)
+            if best.image_url:
+                print(f"INFO selected best_offer.image_url canonical_id={m.canonical_id} url={best.image_url}")
+            else:
+                print(f"WARNING best_offer.image_url is empty canonical_id={m.canonical_id}")
             upsert_today_min(min_ws, today, m.canonical_id, best.protein_cost, best.shop_name, best.item_url)
             marketing_reports.append((m, best, build_marketing_report(m, best, hist_ws, today, yesterday)))
 
