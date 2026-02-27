@@ -652,7 +652,10 @@ def upsert_today_min(min_ws, date: str, cid: str, min_cost: float, min_shop: str
 
     updated_at = jst_now_iso()
     if target_row:
-        min_ws.update(f"C{target_row}:F{target_row}", [[str(min_cost), min_shop, min_url, updated_at]])
+        min_ws.update(
+            values=[[str(min_cost), min_shop, min_url, updated_at]],
+            range_name=f"C{target_row}:F{target_row}",
+        )
     else:
         min_ws.append_row([date, cid, str(min_cost), min_shop, min_url, updated_at], value_input_option="RAW")
 
