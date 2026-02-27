@@ -149,22 +149,31 @@ def normalize_image_url(url: str) -> str:
 
 
 def pick_best_image_url(item: Dict[str, Any]) -> str:
+    def first_image_url(raw: Any) -> str:
+        if isinstance(raw, str):
+            return normalize_image_url(raw)
+        if isinstance(raw, dict):
+            for key in ("imageUrl", "itemImageUrl", "url"):
+                if raw.get(key):
+                    return normalize_image_url(str(raw.get(key, "")))
+            return ""
+        if isinstance(raw, list):
+            for elem in raw:
+                selected = first_image_url(elem)
+                if selected:
+                    return selected
+        return ""
 
-    medium_images = item.get("mediumImageUrls") or []
-    if isinstance(medium_images, list) and medium_images:
-        image = medium_images[0]
-        if isinstance(image, dict) and image.get("imageUrl"):
-            selected_url = normalize_image_url(str(image.get("imageUrl", "")))
-            if selected_url:
-                return selected_url
-
-    small_images = item.get("smallImageUrls") or []
-    if isinstance(small_images, list) and small_images:
-        image = small_images[0]
-        if isinstance(image, dict) and image.get("imageUrl"):
-            selected_url = normalize_image_url(str(image.get("imageUrl", "")))
-            if selected_url:
-                return selected_url
+    for key in (
+        "mediumImageUrls",
+        "smallImageUrls",
+        "imageUrl",
+        "itemImageUrl",
+        "itemImageUrls",
+    ):
+        selected_url = first_image_url(item.get(key))
+        if selected_url:
+            return selected_url
 
     return ""
 
