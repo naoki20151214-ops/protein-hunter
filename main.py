@@ -652,6 +652,7 @@ def upsert_today_min(min_ws, date: str, cid: str, min_cost: float, min_shop: str
 
     updated_at = jst_now_iso()
     if target_row:
+        # gspread warning対策: updateはキーワード引数(values/range_name)で統一する
         min_ws.update(
             values=[[str(min_cost), min_shop, min_url, updated_at]],
             range_name=f"C{target_row}:F{target_row}",
