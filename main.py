@@ -131,18 +131,42 @@ def choose_variant_jst(now: Optional[datetime] = None) -> Tuple[str, str, str, s
 
 
 def pick_best_image_url(item: Dict[str, Any]) -> str:
+    def normalize_image_url(url: str) -> str:
+        image_url = (url or "").strip()
+        if not image_url:
+            return ""
+
+        if image_url.startswith("//"):
+            image_url = f"https:{image_url}"
+
+        image_url = re.sub(r"^http://", "https://", image_url, flags=re.IGNORECASE)
+
+        if re.search(r"([?&])_ex=\d+x\d+", image_url):
+            image_url = re.sub(r"([?&])_ex=\d+x\d+", r"\1_ex=600x600", image_url)
+        else:
+            image_url = f"{image_url}&_ex=600x600" if "?" in image_url else f"{image_url}?_ex=600x600"
+
+        return image_url
+
     medium_images = item.get("mediumImageUrls") or []
     if isinstance(medium_images, list) and medium_images:
         image = medium_images[0]
         if isinstance(image, dict) and image.get("imageUrl"):
-            return str(image.get("imageUrl", "")).strip()
+            selected_url = normalize_image_url(str(image.get("imageUrl", "")))
+            if selected_url:
+                print(f"DEBUG selected_image_url: {selected_url}")
+                return selected_url
 
     small_images = item.get("smallImageUrls") or []
     if isinstance(small_images, list) and small_images:
         image = small_images[0]
         if isinstance(image, dict) and image.get("imageUrl"):
-            return str(image.get("imageUrl", "")).strip()
+            selected_url = normalize_image_url(str(image.get("imageUrl", "")))
+            if selected_url:
+                print(f"DEBUG selected_image_url: {selected_url}")
+                return selected_url
 
+    print("DEBUG no_image")
     return ""
 
 
@@ -366,6 +390,8 @@ def build_marketing_report(master: MasterItem, best_offer: OfferRow, hist_ws, to
 
     hatena_markdown = "\n".join(
         [
+            image_block,
+            "",
             f"🔥 判定：{variant_headline}（{variant_reason}）",
             f"実質：{today_price:,}円/kg｜前日比：{diff_inline}｜30日最安：{low30_flag}",
             "👉 価格と在庫は下のボタンから確認",
@@ -377,8 +403,6 @@ def build_marketing_report(master: MasterItem, best_offer: OfferRow, hist_ws, to
             f"- 今日最安: **{today_price:,}円/kg**",
             f"- 前日比: **{diff_inline}**",
             f"- 30日最安: **{low30_flag}**（{f'{min_30d_price:,}円' if min_30d_price is not None else 'データ不足'}）",
-            "",
-            image_block,
             "",
             "## 今日の結論",
             f"- 判定: **{variant_headline}**",
