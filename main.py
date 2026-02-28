@@ -112,6 +112,26 @@ def choose_variant_jst(now: Optional[datetime] = None) -> Tuple[str, str, str, s
     dt = now.astimezone(ZoneInfo("Asia/Tokyo")) if now else datetime.now(ZoneInfo("Asia/Tokyo"))
     weekday = dt.weekday()  # Mon=0..Sun=6
     weekday_names = ["月", "火", "水", "木", "金", "土", "日"]
+    forced_variant = os.environ.get("FORCE_VARIANT", "").strip().upper()
+
+    if forced_variant == "A":
+        return (
+            "A",
+            "今日が買い時",
+            "30日最安水準",
+            "補充する人は今日が安全。ポイント条件だけ確認してGO。",
+            dt.date().isoformat(),
+            weekday_names[weekday],
+        )
+    if forced_variant == "B":
+        return (
+            "B",
+            "逃すと損しやすい水準",
+            "急落後は戻りやすい",
+            "この水準は長く続かないことが多い。売り切れ前に確認。",
+            dt.date().isoformat(),
+            weekday_names[weekday],
+        )
 
     if weekday in {0, 2, 4}:  # Mon/Wed/Fri
         return (
@@ -248,6 +268,17 @@ class PriceChangeReport:
     hatena_markdown: str
     persona_slot_count: int
     persona_section_chars: int
+
+
+@dataclass
+class ChangeFlags:
+    changed_shop: bool
+    changed_min_cost: bool
+    new_alltime_low: bool
+
+    @property
+    def has_change(self) -> bool:
+        return self.changed_shop or self.changed_min_cost or self.new_alltime_low
 
 
 def build_hatena_service_endpoint() -> Optional[str]:
@@ -406,8 +437,11 @@ def build_marketing_report(
     level = choose_level(diff_yen, diff_pct, is_30d_low)
     variant, variant_headline, variant_reason, variant_push_text, date_jst, weekday_jst = choose_variant_jst()
     short_name = shorten_item_name(best_offer.item_name)
-    capacity_label = f"{master.capacity_kg:g}"
-    product_label = f"{master.brand} {capacity_label}kg".strip()
+    capacity_label = f"{master.capacity_kg:g}kg" if master.capacity_kg > 0 else ""
+    name_basis = master.search_keyword or master.brand
+    product_label = " ".join([x for x in [master.brand, name_basis, capacity_label] if x]).strip()
+    if not product_label:
+        product_label = master.canonical_id
     brand_hashtag = f"#{master.brand.replace(' ', '').replace('　', '')}" if master.brand else ""
 
     diff_label = (
@@ -729,6 +763,21 @@ def read_alltime_min(min_ws) -> Dict[str, Tuple[float, str, str]]:
             out[cid] = (cost, shop, url)
     return out
 
+
+def detect_changes(
+    best: OfferRow,
+    yday_best: Optional[Tuple[float, str, str]],
+    alltime_best: Optional[Tuple[float, str, str]],
+) -> ChangeFlags:
+    changed_shop = (yday_best is not None) and (best.shop_name != yday_best[1])
+    changed_min_cost = (yday_best is not None) and (not math.isclose(best.protein_cost, yday_best[0], rel_tol=1e-9, abs_tol=1e-6))
+    new_alltime_low = (alltime_best is None) or (best.protein_cost < alltime_best[0])
+    return ChangeFlags(
+        changed_shop=changed_shop,
+        changed_min_cost=changed_min_cost,
+        new_alltime_low=new_alltime_low,
+    )
+
 def upsert_today_min(min_ws, date: str, cid: str, min_cost: float, min_shop: str, min_url: str) -> None:
     """
     Upsert by (date, canonical_id).
@@ -961,11 +1010,19 @@ def main():
 
     all_offers: List[OfferRow] = []
     notify_payloads: List[Tuple[str, List[str]]] = []
-    best_offers_for_ranking: List[OfferRow] = []
-    marketing_reports: List[Tuple[MasterItem, OfferRow, PriceChangeReport]] = []
+    marketing_reports: List[Tuple[MasterItem, OfferRow, PriceChangeReport, ChangeFlags]] = []
     run_errors: List[str] = []
 
     for m in masters:
+        if m.capacity_kg <= 0 or m.protein_ratio <= 0:
+            print(
+                "WARNING master: skipped due to missing capacity_kg/protein_ratio",
+                f"canonical_id={m.canonical_id}",
+                f"capacity_kg={m.capacity_kg}",
+                f"protein_ratio={m.protein_ratio}",
+            )
+            continue
+
         time.sleep(REQUEST_SLEEP_SEC)
 
         # Fetch many, then compute effective cost and keep best STORE_HITS
@@ -1022,7 +1079,6 @@ def main():
         if offers_for_this:
             best = offers_for_this[0]
             ranking_offers = offers_for_this[:RANKING_N]
-            best_offers_for_ranking.append(best)
             if best.image_url:
                 print(f"INFO selected best_offer.image_url canonical_id={m.canonical_id} url={best.image_url}")
             else:
@@ -1030,18 +1086,22 @@ def main():
             print(
                 f"INFO ranking_count={len(ranking_offers)} hero_count={min(HERO_K, len(ranking_offers))} canonical_id={m.canonical_id}"
             )
-            upsert_today_min(min_ws, today, m.canonical_id, best.protein_cost, best.shop_name, best.item_url)
-            marketing_reports.append(
-                (m, best, build_marketing_report(m, best, hist_ws, today, yesterday, ranking_offers=ranking_offers))
-            )
-
             y_best = yday_min.get(m.canonical_id)
             a_best = alltime_min.get(m.canonical_id)
+            change_flags = detect_changes(best, y_best, a_best)
 
-            changed_shop = (y_best is not None) and (best.shop_name != y_best[1])
-            new_alltime_low = (a_best is None) or (best.protein_cost < a_best[0])
+            upsert_today_min(min_ws, today, m.canonical_id, best.protein_cost, best.shop_name, best.item_url)
 
-            if changed_shop or new_alltime_low:
+            if change_flags.has_change:
+                marketing_reports.append(
+                    (
+                        m,
+                        best,
+                        build_marketing_report(m, best, hist_ws, today, yesterday, ranking_offers=ranking_offers),
+                        change_flags,
+                    )
+                )
+
                 top3 = offers_for_this[:3]
                 lines = [
                     f"- canonical_id: `{m.canonical_id}` / keyword: {m.search_keyword}",
@@ -1049,6 +1109,7 @@ def main():
                     f"- 価格: {best.raw_price:,}円 送料加算:{best.shipping_cost:,}円 pt:{best.point_rate*100:.1f}%",
                     f"- 商品: {best.item_name[:100]}",
                     f"- URL: {best.item_url}",
+                    f"- 変化: shop={'あり' if change_flags.changed_shop else 'なし'} / min_cost={'あり' if change_flags.changed_min_cost else 'なし'} / alltime={'更新' if change_flags.new_alltime_low else '未更新'}",
                 ]
                 if y_best:
                     lines.append(f"- 昨日の最安: {y_best[1]} / {y_best[0]:,.0f}円")
@@ -1062,7 +1123,12 @@ def main():
                         f"{i}. {o.shop_name} / {o.protein_cost:,.0f}円 (価格{o.raw_price:,}+送料{o.shipping_cost:,}, pt{o.point_rate*100:.1f}%)"
                     )
 
-                title = "【過去最安更新】" if new_alltime_low else "【最安ショップ入れ替わり】"
+                if change_flags.new_alltime_low:
+                    title = "【過去最安更新】"
+                elif change_flags.changed_shop:
+                    title = "【最安ショップ入れ替わり】"
+                else:
+                    title = "【実質コスト変化】"
                 notify_payloads.append((f"{title} {m.canonical_id} ({today})", lines))
 
     # Write to Price_History
@@ -1079,16 +1145,16 @@ def main():
     for title, lines in notify_payloads:
         discord_notify(title, lines)
 
-    # Generate and notify revenue-maximized posting drafts for Explosion 3kg
+    # Generate and notify posting drafts only for changed products
     hatena_result = HatenaPostResult(ok=True, status_code=None, endpoint="", message="skipped")
-    for m, best, report in marketing_reports:
+    for m, best, report, change_flags in marketing_reports:
         diff_line = (
             f"{report.diff_yen:+,}円 ({report.diff_pct:+.1f}%)"
             if report.diff_yen is not None and report.diff_pct is not None
             else "データ不足"
         )
         lines = [
-            f"- product: {m.canonical_id} / エクスプロージョン3kg",
+            f"- product: {m.canonical_id} / {m.search_keyword or m.brand}",
             f"- today: {report.today_price:,}円",
             f"- 前日比: {diff_line}",
             f"- 30日最安: {'更新' if report.is_30d_low else '未更新'}"
@@ -1096,6 +1162,7 @@ def main():
             f"- level: {report.level}",
             f"- variant: {report.variant} ({report.date_jst} {report.weekday_jst})",
             f"- image: {'採用' if report.image_selected else '未取得'}",
+            f"- change: shop={'あり' if change_flags.changed_shop else 'なし'} / min_cost={'あり' if change_flags.changed_min_cost else 'なし'} / alltime={'更新' if change_flags.new_alltime_low else '未更新'}",
             "",
             "[X投稿案]",
             report.x_text,
