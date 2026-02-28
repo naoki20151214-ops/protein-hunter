@@ -239,6 +239,7 @@ class PriceChangeReport:
     short_item_name: str
     x_text: str
     hatena_markdown: str
+    persona_summary_lines: List[str]
 
 
 def build_hatena_service_endpoint() -> Optional[str]:
@@ -304,6 +305,234 @@ def build_top3_markdown(best_offers: List[OfferRow]) -> str:
     lines.extend(["---", "", "※ このフォーマットははてなブログAtomPub投稿用です。"])
 
     return "\n".join(lines).strip()
+
+
+PERSONA_SECTIONS: List[Tuple[str, str, bool]] = [
+    ("① 初めての人", "🌱", True),
+    ("② ガッツリ増量したい人", "💪", True),
+    ("③ 本気で筋肥大したい人", "🏋️", False),
+    ("④ ダイエット中の人", "🥗", True),
+    ("⑤ 40代以上の健康維持層", "🧘", False),
+    ("⑥ 家計重視・まとめ買い派", "💴", False),
+    ("⑦ 味重視派", "😋", False),
+    ("⑧ 無添加志向・成分重視派", "🧪", False),
+    ("⑨ 運動は軽め・健康目的派", "🚶", False),
+    ("⑩ 今だけ安い狙い撃ち派", "🎯", True),
+]
+
+
+def contains_any(text: str, patterns: List[str]) -> bool:
+    src = (text or "").lower()
+    return any(re.search(p, src, flags=re.IGNORECASE) for p in patterns)
+
+
+def looks_official_or_major_shop(shop_name: str) -> bool:
+    return contains_any(
+        shop_name,
+        [
+            r"公式",
+            r"オフィシャル",
+            r"本店",
+            r"楽天24",
+            r"rakuten",
+            r"amazon",
+            r"yahoo",
+            r"大手",
+            r"直営",
+        ],
+    )
+
+
+def choose_offer_from_candidates(
+    candidates: List[OfferRow],
+    fallback_sorted: List[OfferRow],
+    used_urls: set,
+    prefer_unused: bool = True,
+) -> OfferRow:
+    ordered = candidates + [o for o in fallback_sorted if o not in candidates]
+    if prefer_unused:
+        for offer in ordered:
+            if offer.item_url not in used_urls:
+                used_urls.add(offer.item_url)
+                return offer
+    chosen = ordered[0] if ordered else fallback_sorted[0]
+    used_urls.add(chosen.item_url)
+    return chosen
+
+
+def assign_persona_sections(offers_for_this: List[OfferRow], prefer_unused: bool = True) -> Dict[str, OfferRow]:
+    if not offers_for_this:
+        return {}
+
+    by_protein = sorted(offers_for_this, key=lambda x: x.protein_cost)
+    by_price = sorted(offers_for_this, key=lambda x: x.raw_price)
+    median_price_offer = by_price[len(by_price) // 2]
+    median_protein_offer = by_protein[len(by_protein) // 2]
+    used_urls: set = set()
+    out: Dict[str, OfferRow] = {}
+
+    def pick(section_name: str, candidates: List[OfferRow], fallback: List[OfferRow]) -> None:
+        out[section_name] = choose_offer_from_candidates(candidates, fallback, used_urls, prefer_unused=prefer_unused)
+
+    # ① 初めて
+    pick("① 初めての人", [o for o in offers_for_this if contains_any(o.item_name, [r"1\s*kg", r"1\s*キロ", r"1キログラム"])], by_price)
+
+    # ② 増量
+    pick("② ガッツリ増量したい人", [o for o in offers_for_this if contains_any(o.item_name, [r"3\s*kg", r"3\s*キロ", r"3キログラム"])], by_protein)
+
+    # ③ 筋肥大
+    pick(
+        "③ 本気で筋肥大したい人",
+        [o for o in offers_for_this if contains_any(o.item_name, [r"wpi", r"アイソレート", r"高たんぱく", r"高タンパク"])],
+        by_protein,
+    )
+
+    # ④ ダイエット
+    pick(
+        "④ ダイエット中の人",
+        [o for o in offers_for_this if contains_any(o.item_name, [r"低脂質", r"低糖質", r"ダイエット", r"甘くない", r"プレーン"])],
+        sorted(offers_for_this, key=lambda o: abs(o.raw_price - median_price_offer.raw_price)),
+    )
+
+    # ⑤ 40代
+    protein_threshold = by_protein[max(0, len(by_protein) // 2 - 1)].protein_cost
+    pick(
+        "⑤ 40代以上の健康維持層",
+        [o for o in offers_for_this if o.protein_cost <= protein_threshold and looks_official_or_major_shop(o.shop_name)],
+        by_protein,
+    )
+
+    # ⑥ 家計
+    pick(
+        "⑥ 家計重視・まとめ買い派",
+        [o for o in offers_for_this if contains_any(o.item_name, [r"3\s*kg", r"3\s*キロ", r"大容量", r"まとめ買い"])],
+        sorted(offers_for_this, key=lambda o: (o.raw_price, o.protein_cost)),
+    )
+
+    # ⑦ 味
+    flavor_hit = [
+        o for o in offers_for_this
+        if contains_any(o.item_name, [r"チョコ", r"バニラ", r"ストロベリー", r"抹茶", r"黒糖", r"ヨーグルト", r"マンゴー", r"ピーチ", r"メロン"])
+    ]
+    pick("⑦ 味重視派", flavor_hit, sorted(offers_for_this, key=lambda o: (0 if o.image_url else 1, o.protein_cost)))
+
+    # ⑧ 無添加
+    pick(
+        "⑧ 無添加志向・成分重視派",
+        [o for o in offers_for_this if contains_any(o.item_name, [r"無添加", r"人工甘味料不使用", r"甘味料不使用", r"保存料不使用"])],
+        sorted(offers_for_this, key=lambda o: (0 if looks_official_or_major_shop(o.shop_name) else 1, o.protein_cost)),
+    )
+
+    # ⑨ 軽め
+    low_idx = int((len(by_price) - 1) * 0.1)
+    high_idx = int((len(by_price) - 1) * 0.9)
+    low_price = by_price[low_idx].raw_price
+    high_price = by_price[high_idx].raw_price
+    moderate = [o for o in offers_for_this if low_price <= o.raw_price <= high_price]
+    pick("⑨ 運動は軽め・健康目的派", moderate, sorted(offers_for_this, key=lambda o: abs(o.protein_cost - median_protein_offer.protein_cost)))
+
+    # ⑩ 狙い撃ち
+    max_point = max(o.point_rate for o in offers_for_this)
+    pick("⑩ 今だけ安い狙い撃ち派", [o for o in offers_for_this if o.point_rate == max_point], sorted(offers_for_this, key=lambda o: (-o.point_rate, o.protein_cost)))
+
+    return out
+
+
+def build_persona_reason(section_name: str, offer: OfferRow, offers: List[OfferRow]) -> str:
+    min_protein = min(o.protein_cost for o in offers)
+    min_price = min(o.raw_price for o in offers)
+    max_point = max(o.point_rate for o in offers)
+    median_price = sorted(o.raw_price for o in offers)[len(offers) // 2]
+
+    if section_name == "① 初めての人":
+        if contains_any(offer.item_name, [r"1\s*kg", r"1\s*キロ", r"1キログラム"]):
+            return "1kg前後の表記で量感がつかみやすく、初回でも選びやすい。価格帯も読みやすく、失敗しづらい一品。"
+        if offer.raw_price == min_price:
+            return "今日の価格帯で最安クラス。まず始める1袋として出費を抑えやすい。"
+        return "価格と単価のバランスが安定していて、最初の1品として無理なく続けやすい。"
+    if section_name == "② ガッツリ増量したい人":
+        if offer.protein_cost == min_protein:
+            return "単価が今日の最安。毎日しっかり飲む前提の人に刺さる構成。"
+        if offer.point_rate >= 0.05:
+            return "ポイント還元が強く、実質コスパがさらに伸びやすい。増量期の継続コストを抑えやすい。"
+        return "容量寄りの候補として日々の消費に向く。送料込みでも総額で見て優位を作りやすい。"
+    if section_name == "③ 本気で筋肥大したい人":
+        if contains_any(offer.item_name, [r"wpi", r"アイソレート", r"高たんぱく", r"高タンパク"]):
+            return "高たんぱく系のキーワードを含む候補。トレーニング重視で成分軸を優先したい日に合う。"
+        if offer.protein_cost <= min_protein * 1.05:
+            return "単価が上位水準なので、摂取量を増やす局面でも継続しやすい。"
+        return "上位コスパ帯から選定。実行しやすさを重視した筋肥大向けの現実解。"
+    if section_name == "④ ダイエット中の人":
+        if contains_any(offer.item_name, [r"低脂質", r"低糖質", r"ダイエット", r"甘くない", r"プレーン"]):
+            return "ダイエット向けキーワードを優先して選定。味付けが重すぎず、調整しやすい。"
+        if abs(offer.raw_price - median_price) <= max(300, median_price * 0.05):
+            return "価格が中位付近で極端さが少ない。続ける前提の置き換え用として扱いやすい。"
+        return "単価と総額の偏りが小さく、減量中でも管理しやすい一本。"
+    if section_name == "⑤ 40代以上の健康維持層":
+        if looks_official_or_major_shop(offer.shop_name):
+            return "公式・大手寄りショップを優先。購入動線がわかりやすく、継続しやすい。"
+        if offer.protein_cost <= min_protein * 1.1:
+            return "単価が上位50%以内の水準で、無理のない継続コストに寄せやすい。"
+        return "価格バランス重視で選定。習慣化を崩しにくい堅実な候補。"
+    if section_name == "⑥ 家計重視・まとめ買い派":
+        if contains_any(offer.item_name, [r"3\s*kg", r"3\s*キロ", r"大容量", r"まとめ買い"]):
+            return "大容量キーワード優先で、買い足し回数を減らしやすい。家計管理の手間も抑えやすい。"
+        if offer.raw_price == min_price:
+            return "本体価格が最安クラス。まず総支出を抑えたい日には有力。"
+        return "価格と単価の両面から家計優先で選定。日次運用で扱いやすい。"
+    if section_name == "⑦ 味重視派":
+        if contains_any(offer.item_name, [r"チョコ", r"バニラ", r"ストロベリー", r"抹茶", r"黒糖", r"ヨーグルト", r"マンゴー", r"ピーチ", r"メロン"]):
+            return "フレーバー語を含む候補を優先。毎日飲む前提でも飽きにくさを狙える。"
+        if offer.image_url:
+            return "画像付きで味のイメージを掴みやすい候補を優先。選ぶストレスを下げやすい。"
+        return "味軸の候補が薄い日は、見た目情報と単価のバランスで無難に選定。"
+    if section_name == "⑧ 無添加志向・成分重視派":
+        if contains_any(offer.item_name, [r"無添加", r"人工甘味料不使用", r"甘味料不使用", r"保存料不使用"]):
+            return "無添加系キーワードを優先。成分基準で選びたい日に判断しやすい。"
+        if looks_official_or_major_shop(offer.shop_name):
+            return "公式・大手ショップ寄りを採用。商品情報の確認がしやすい点を重視。"
+        return "成分訴求が弱い日はショップ信頼度と価格安定性を優先して選定。"
+    if section_name == "⑨ 運動は軽め・健康目的派":
+        if offer.raw_price == median_price:
+            return "価格が中央値で極端な高安を避けられる。軽め運動の補助として続けやすい。"
+        if offer.protein_cost <= min_protein * 1.15:
+            return "単価が中庸〜上位帯で、過不足のないコスパを取りやすい。"
+        return "高すぎず安すぎない帯から選定。健康維持目的でも使いやすい。"
+    if section_name == "⑩ 今だけ安い狙い撃ち派":
+        if offer.point_rate == max_point:
+            return "本日のポイント還元が最大クラス。実質負担を狙って取りにいける構成。"
+        if offer.protein_cost == min_protein:
+            return "還元を除いても単価が最安水準。タイミング買いの主軸にしやすい。"
+        return "還元と単価の合算でお得感を優先。短期の狙い撃ちに向く候補。"
+    return "当日の価格・還元条件から機械選定したおすすめです。"
+
+
+def build_persona_sections_markdown(assignments: Dict[str, OfferRow], offers: List[OfferRow]) -> Tuple[List[str], List[str]]:
+    markdown_lines: List[str] = ["## 人別おすすめ（今日の10枠）", ""]
+    discord_lines: List[str] = []
+    image_sections = {"① 初めての人", "② ガッツリ増量したい人", "④ ダイエット中の人", "⑩ 今だけ安い狙い撃ち派"}
+
+    for section_name, emoji, show_image in PERSONA_SECTIONS:
+        offer = assignments.get(section_name)
+        if not offer:
+            continue
+        reason = build_persona_reason(section_name, offer, offers)
+        point_pct = offer.point_rate * 100.0
+        markdown_lines.extend(
+            [
+                f"## {emoji} {section_name}",
+                f"- おすすめ: **{shorten_item_name(offer.item_name, 52)}**",
+                f"- 理由: {reason}",
+                f"- 実質: **{offer.protein_cost:,.0f}円/kg**｜価格: {offer.raw_price:,}円｜pt: {point_pct:.1f}%｜ショップ: {offer.shop_name}",
+                f"**👉 [商品を見に行く]({offer.item_url})**",
+            ]
+        )
+        if show_image and section_name in image_sections and offer.image_url:
+            markdown_lines.append(f"![商品画像]({offer.image_url})")
+        markdown_lines.append("")
+        discord_lines.append(f"- {section_name}: {shorten_item_name(offer.item_name, 26)}｜{offer.protein_cost:,.0f}円/kg｜{offer.item_url}")
+
+    return markdown_lines, discord_lines
 
 
 def is_explosion_3kg_target(master: MasterItem) -> bool:
@@ -408,7 +637,17 @@ def build_marketing_report(
         image_block_lines = [f"![商品画像]({best_offer.image_url})", ""]
 
     ranking_sections: List[str] = []
+    persona_section_lines: List[str] = []
+    persona_summary_lines: List[str] = []
     if ranking_offers is not None:
+        persona_assignments = assign_persona_sections(ranking_offers, prefer_unused=True)
+        assignment_summary = {
+            section: (offer.item_url or offer.canonical_id)
+            for section, offer in persona_assignments.items()
+        }
+        print("INFO section assignment summary:", json.dumps(assignment_summary, ensure_ascii=False))
+        persona_section_lines, persona_summary_lines = build_persona_sections_markdown(persona_assignments, ranking_offers)
+
         hero_offers = ranking_offers[:HERO_K]
         top_offers = ranking_offers[:RANKING_N]
 
@@ -463,7 +702,7 @@ def build_marketing_report(
             f"- 判定: **{variant_headline}**",
             f"- 理由: {variant_reason}",
             "",
-        ] + ranking_sections + [
+        ] + persona_section_lines + ranking_sections + [
             "## 価格データ",
             f"- 商品名: {short_name}",
             f"- ショップ: {best_offer.shop_name}",
@@ -502,6 +741,7 @@ def build_marketing_report(
         short_item_name=short_name,
         x_text=x_text,
         hatena_markdown=hatena_markdown,
+        persona_summary_lines=persona_summary_lines,
     )
 
 
@@ -1063,6 +1303,9 @@ def main():
             f"- level: {report.level}",
             f"- variant: {report.variant} ({report.date_jst} {report.weekday_jst})",
             f"- image: {'採用' if report.image_selected else '未取得'}",
+            "",
+            "[人別セクション（要約）]",
+        ] + report.persona_summary_lines + [
             "",
             "[X投稿案]",
             report.x_text,
