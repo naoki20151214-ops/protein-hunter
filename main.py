@@ -198,11 +198,18 @@ def safe_int(x: Any, default: int = 0) -> int:
     except Exception:
         return default
 
+
+def clamp_discord_content(content: str, limit: int = 1800) -> str:
+    if len(content) <= limit:
+        return content
+    suffix = "\n...（自動短縮）"
+    return content[: max(0, limit - len(suffix))] + suffix
+
 def discord_notify(title: str, lines: List[str]) -> None:
     if not DISCORD_WEBHOOK_URL:
         return
     content = f"**{title}**\n" + "\n".join(lines)
-    content = content[:1800]
+    content = clamp_discord_content(content, limit=1800)
     try:
         resp = requests.post(DISCORD_WEBHOOK_URL, json={"content": content}, timeout=20)
         resp.raise_for_status()
@@ -239,6 +246,8 @@ class PriceChangeReport:
     short_item_name: str
     x_text: str
     hatena_markdown: str
+    persona_slot_count: int
+    persona_section_chars: int
 
 
 def build_hatena_service_endpoint() -> Optional[str]:
@@ -353,6 +362,36 @@ def build_marketing_report(
     yesterday: str,
     ranking_offers: Optional[List[OfferRow]] = None,
 ) -> PriceChangeReport:
+    def build_persona_sections(offers: List[OfferRow], fallback_offer: OfferRow) -> List[str]:
+        personas = [
+            ("コスパ重視で最安を狙う人", "実質単価を最優先で比較したい"),
+            ("初めて買う人", "まずは定番の売れ筋から失敗を避けたい"),
+            ("毎日飲んで消費が早い人", "価格変動の前にまとめて確保したい"),
+            ("ポイント還元を活用したい人", "セールとポイント倍率を合わせて得したい"),
+            ("送料を抑えたい人", "本体価格だけでなく送料込みで判断したい"),
+            ("お気に入りのショップで買いたい人", "レビューや対応が安定した店舗を選びたい"),
+            ("最短で補充したい人", "在庫切れ前に今すぐ購入したい"),
+            ("品質を重視する人", "価格だけでなく人気商品を優先したい"),
+            ("価格下落タイミングを待っていた人", "今日の値下がりを確認して動きたい"),
+            ("迷っていて最後の一押しが欲しい人", "比較結果を見てすぐ決めたい"),
+        ]
+
+        lines: List[str] = ["## 人別おすすめセクション（10枠）", ""]
+        for idx, (heading, condition) in enumerate(personas, 1):
+            offer = offers[idx - 1] if idx - 1 < len(offers) else fallback_offer
+            reason = f"実質{offer.protein_cost:,.0f}円/kgで、{offer.shop_name or '実績あるショップ'}から買えるため。"
+            lines.extend(
+                [
+                    f"### 枠{idx}: {heading}",
+                    f"- 条件: {condition}",
+                    f"- おすすめ商品: **{shorten_item_name(offer.item_name, 60)}**",
+                    f"- 理由: {reason}",
+                    f"- **👉 [大きめリンクで価格・在庫を確認する]({offer.item_url})**",
+                    "",
+                ]
+            )
+        return lines
+
     daily_min = read_price_history_daily_min(hist_ws, master.canonical_id)
     today_price = best_offer.raw_price
     yesterday_price = daily_min.get(yesterday)
@@ -408,6 +447,7 @@ def build_marketing_report(
         image_block_lines = [f"![商品画像]({best_offer.image_url})", ""]
 
     ranking_sections: List[str] = []
+    persona_sections: List[str] = build_persona_sections(ranking_offers or [], best_offer)
     if ranking_offers is not None:
         hero_offers = ranking_offers[:HERO_K]
         top_offers = ranking_offers[:RANKING_N]
@@ -463,7 +503,7 @@ def build_marketing_report(
             f"- 判定: **{variant_headline}**",
             f"- 理由: {variant_reason}",
             "",
-        ] + ranking_sections + [
+        ] + persona_sections + ranking_sections + [
             "## 価格データ",
             f"- 商品名: {short_name}",
             f"- ショップ: {best_offer.shop_name}",
@@ -502,6 +542,8 @@ def build_marketing_report(
         short_item_name=short_name,
         x_text=x_text,
         hatena_markdown=hatena_markdown,
+        persona_slot_count=10,
+        persona_section_chars=len("\n".join(persona_sections)),
     )
 
 
@@ -1078,6 +1120,8 @@ def main():
             f"date_jst={report.date_jst}",
             f"weekday_jst={report.weekday_jst}",
             f"image_url_status={'採用' if report.image_selected else '未取得'}",
+            f"persona枠数={report.persona_slot_count}",
+            f"persona文字数={report.persona_section_chars}",
         )
 
         hatena_result = post_top3_to_hatena(report.hatena_markdown)
