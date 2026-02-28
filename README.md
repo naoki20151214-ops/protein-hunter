@@ -65,9 +65,9 @@ HATENA_BLOG_ID=protain-hunter.hatenablog.com
 ```
 
 
-## 収益最大化モード（エクスプロージョン3kg専用）
+## 収益最大化モード（Master_List全商品対応）
 
-このジョブは `Master_List` から **エクスプロージョン3kg** のみを対象にして、毎回以下を実施します。
+このジョブは `Master_List` の**全canonical_id**を対象に、毎回以下を実施します。
 
 - 前日比（円・％）を算出
 - 過去30日最安を判定
@@ -91,7 +91,7 @@ HATENA_BLOG_ID=protain-hunter.hatenablog.com
   2. 実質価格（円/kg）+ 前日比（円・％）+ 30日最安フラグ
   3. CTA誘導文（「下のボタンから確認」）
 - ヒーロー
-  - H1: `エクスプロージョン3kg 価格速報（YYYY-MM-DD）`
+  - H1: `<商品名> 価格速報（YYYY-MM-DD）`
   - 判定1行（A/B切替）
   - 価格サマリ3点（今日最安 / 前日比 / 30日最安）
 - 大きめ商品画像
