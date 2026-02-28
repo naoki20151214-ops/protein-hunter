@@ -419,6 +419,8 @@ def build_marketing_report(
                 medal = medals[i] if i < len(medals) else "🏅"
                 point_pct = (offer.point_rate if offer.point_rate is not None else 0.0) * 100.0
                 ranking_sections.append(f"### {medal} {shorten_item_name(offer.item_name, 60)}")
+                if offer.item_url:
+                    ranking_sections.append(f"**👉 [商品を見に行く]({offer.item_url})**")
                 if offer.image_url:
                     ranking_sections.append(f"![商品画像]({offer.image_url})")
                 ranking_sections.extend(
@@ -440,7 +442,7 @@ def build_marketing_report(
                     f"- {rank}. {shorten_item_name(offer.item_name, 60)}｜**{offer.protein_cost:,.0f}円/kg**｜{offer.shop_name or ''}"
                 )
                 if offer.item_url:
-                    ranking_sections.append(f"  - 👉 {offer.item_url}")
+                    ranking_sections.append(f"  - **👉 [商品を見に行く]({offer.item_url})**")
             ranking_sections.append("")
 
     hatena_markdown = "\n".join(
