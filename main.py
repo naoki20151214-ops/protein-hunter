@@ -315,14 +315,6 @@ def build_top3_markdown(best_offers: List[OfferRow]) -> str:
     return "\n".join(lines).strip()
 
 
-def is_explosion_3kg_target(master: MasterItem) -> bool:
-    cid = (master.canonical_id or "").lower()
-    kw = (master.search_keyword or "").lower()
-    brand = (master.brand or "").lower()
-    name_hit = "explosion" in cid or "explosion" in kw or "エクスプロージョン" in master.search_keyword or "エクスプロージョン" in master.brand
-    return name_hit and abs(master.capacity_kg - 3.0) < 1e-9
-
-
 def read_price_history_daily_min(hist_ws, canonical_id: str) -> Dict[str, int]:
     rows = hist_ws.get_all_records()
     out: Dict[str, int] = {}
@@ -414,6 +406,9 @@ def build_marketing_report(
     level = choose_level(diff_yen, diff_pct, is_30d_low)
     variant, variant_headline, variant_reason, variant_push_text, date_jst, weekday_jst = choose_variant_jst()
     short_name = shorten_item_name(best_offer.item_name)
+    capacity_label = f"{master.capacity_kg:g}"
+    product_label = f"{master.brand} {capacity_label}kg".strip()
+    brand_hashtag = f"#{master.brand.replace(' ', '').replace('　', '')}" if master.brand else ""
 
     diff_label = (
         f"前日比 {diff_yen:+,}円 ({diff_pct:+.1f}%)"
@@ -431,14 +426,14 @@ def build_marketing_report(
     x_text = "\n".join(
         [
             "【Rakuten Protein Tracker】",
-            "エクスプロージョン 3kg 価格チェック",
+            f"{product_label} 価格チェック",
             f"今日の最安: {today_price:,}円",
             diff_label,
             f"変動レベル: {level}",
             f"{low30_label} / {low30_flag}",
             variant_push_text,
             best_offer.item_url,
-            "#楽天市場 #プロテイン #エクスプロージョン",
+            " ".join(["#楽天市場", "#プロテイン", brand_hashtag]).strip(),
         ]
     )
 
@@ -491,7 +486,7 @@ def build_marketing_report(
             f"実質：{today_price:,}円/kg｜前日比：{diff_inline}｜30日最安：{low30_flag}",
             "👉 価格と在庫は下のボタンから確認",
             "",
-            f"# エクスプロージョン3kg 価格速報（{today}）",
+            f"# {product_label} 価格速報（{today}）",
             "",
             f"**{variant_headline}**",
             "",
@@ -959,10 +954,6 @@ def main():
     masters = read_master(master_ws)
     if not masters:
         raise RuntimeError("Master_List is empty or missing required columns.")
-
-    masters = [m for m in masters if is_explosion_3kg_target(m)]
-    if not masters:
-        raise RuntimeError("Target product (エクスプロージョン3kg) not found in Master_List.")
 
     # Read minima from Min_Summary only (fast)
     yday_min = read_min_summary(min_ws, yesterday)   # {cid: (cost, shop, url)}
