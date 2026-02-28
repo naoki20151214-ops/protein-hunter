@@ -1,0 +1,36 @@
+name: Improve Loop MVP
+
+on:
+  workflow_dispatch:
+  schedule:
+    # JST 07:00 / 13:00 / 20:00 = UTC 22:00(previous day) / 04:00 / 11:00
+    - cron: "0 22,4,11 * * *"
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: improve-loop
+  cancel-in-progress: false
+
+jobs:
+  evaluate-issues:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run improve loop
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DISCORD_IMPROVE_WEBHOOK_URL: ${{ secrets.DISCORD_IMPROVE_WEBHOOK_URL }}
+        run: python tools/improve_loop.py
