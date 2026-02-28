@@ -249,12 +249,13 @@ class HatenaPostResult:
 @dataclass
 class PriceChangeReport:
     level: str
-    today_price: int
-    yesterday_price: Optional[int]
-    diff_yen: Optional[int]
+    today_protein_cost: float
+    today_raw_price: int
+    yesterday_protein_cost: Optional[float]
+    diff_yen: Optional[float]
     diff_pct: Optional[float]
     is_30d_low: bool
-    min_30d_price: Optional[int]
+    min_30d_protein_cost: Optional[float]
     variant: str
     variant_headline: str
     variant_reason: str
@@ -346,9 +347,9 @@ def build_top3_markdown(best_offers: List[OfferRow]) -> str:
     return "\n".join(lines).strip()
 
 
-def read_price_history_daily_min(hist_ws, canonical_id: str) -> Dict[str, int]:
+def read_price_history_daily_min(hist_ws, canonical_id: str) -> Dict[str, float]:
     rows = hist_ws.get_all_records()
-    out: Dict[str, int] = {}
+    out: Dict[str, float] = {}
     for r in rows:
         cid = str(r.get("canonical_id", "")).strip()
         if cid != canonical_id:
@@ -356,16 +357,16 @@ def read_price_history_daily_min(hist_ws, canonical_id: str) -> Dict[str, int]:
         day = str(r.get("date", "")).strip()
         if not day:
             continue
-        raw_price = safe_int(r.get("raw_price", math.inf), math.inf)
-        if raw_price == math.inf:
+        protein_cost = safe_float(r.get("protein_cost", math.inf), math.inf)
+        if protein_cost == math.inf:
             continue
         prev = out.get(day)
-        if prev is None or raw_price < prev:
-            out[day] = raw_price
+        if prev is None or protein_cost < prev:
+            out[day] = protein_cost
     return out
 
 
-def choose_level(diff_yen: Optional[int], diff_pct: Optional[float], is_30d_low: bool) -> str:
+def choose_level(diff_yen: Optional[float], diff_pct: Optional[float], is_30d_low: bool) -> str:
     if is_30d_low:
         return "big_drop"
     if diff_yen is None or diff_pct is None:
@@ -416,22 +417,23 @@ def build_marketing_report(
         return lines
 
     daily_min = read_price_history_daily_min(hist_ws, master.canonical_id)
-    today_price = best_offer.raw_price
-    yesterday_price = daily_min.get(yesterday)
+    today_protein_cost = best_offer.protein_cost
+    today_raw_price = best_offer.raw_price
+    yesterday_protein_cost = daily_min.get(yesterday)
 
-    diff_yen: Optional[int] = None
+    diff_yen: Optional[float] = None
     diff_pct: Optional[float] = None
-    if yesterday_price and yesterday_price > 0:
-        diff_yen = today_price - yesterday_price
-        diff_pct = (diff_yen / yesterday_price) * 100.0
+    if yesterday_protein_cost and yesterday_protein_cost > 0:
+        diff_yen = today_protein_cost - yesterday_protein_cost
+        diff_pct = (diff_yen / yesterday_protein_cost) * 100.0
 
     start_date = (jst_date() - timedelta(days=29)).isoformat()
     recent_prices = [p for d, p in daily_min.items() if start_date <= d <= today]
     if recent_prices:
-        min_30d_price = min(recent_prices)
-        is_30d_low = today_price <= min_30d_price
+        min_30d_protein_cost = min(recent_prices)
+        is_30d_low = today_protein_cost <= min_30d_protein_cost
     else:
-        min_30d_price = None
+        min_30d_protein_cost = None
         is_30d_low = False
 
     level = choose_level(diff_yen, diff_pct, is_30d_low)
@@ -449,7 +451,7 @@ def build_marketing_report(
         if diff_yen is not None and diff_pct is not None
         else "前日比 データ不足"
     )
-    low30_label = f"30日最安 {min_30d_price:,}円" if min_30d_price is not None else "30日最安 データ不足"
+    low30_label = f"30日最安 {min_30d_protein_cost:,.0f}円/kg" if min_30d_protein_cost is not None else "30日最安 データ不足"
     diff_inline = (
         f"{diff_yen:+,}円（{diff_pct:+.1f}%）"
         if diff_yen is not None and diff_pct is not None
@@ -461,7 +463,8 @@ def build_marketing_report(
         [
             "【Rakuten Protein Tracker】",
             f"{product_label} 価格チェック",
-            f"今日の最安: {today_price:,}円",
+            f"今日の実質最安: {today_protein_cost:,.0f}円/kg",
+            f"価格: {today_raw_price:,}円",
             diff_label,
             f"変動レベル: {level}",
             f"{low30_label} / {low30_flag}",
@@ -517,16 +520,17 @@ def build_marketing_report(
     hatena_markdown = "\n".join(
         image_block_lines + [
             f"🔥 判定：{variant_headline}（{variant_reason}）",
-            f"実質：{today_price:,}円/kg｜前日比：{diff_inline}｜30日最安：{low30_flag}",
+            f"実質：{today_protein_cost:,.0f}円/kg｜価格：{today_raw_price:,}円｜前日比：{diff_inline}｜30日最安：{low30_flag}",
             "👉 価格と在庫は下のボタンから確認",
             "",
             f"# {product_label} 価格速報（{today}）",
             "",
             f"**{variant_headline}**",
             "",
-            f"- 今日最安: **{today_price:,}円/kg**",
+            f"- 今日最安（実質）: **{today_protein_cost:,.0f}円/kg**",
+            f"- 価格（本体）: **{today_raw_price:,}円**",
             f"- 前日比: **{diff_inline}**",
-            f"- 30日最安: **{low30_flag}**（{f'{min_30d_price:,}円' if min_30d_price is not None else 'データ不足'}）",
+            f"- 30日最安: **{low30_flag}**（{f'{min_30d_protein_cost:,.0f}円/kg' if min_30d_protein_cost is not None else 'データ不足'}）",
             "",
             "## 今日の結論",
             f"- 判定: **{variant_headline}**",
@@ -536,9 +540,10 @@ def build_marketing_report(
             "## 価格データ",
             f"- 商品名: {short_name}",
             f"- ショップ: {best_offer.shop_name}",
-            f"- 今日の実質価格: **{today_price:,}円/kg**",
+            f"- 今日の実質価格: **{today_protein_cost:,.0f}円/kg**",
+            f"- 価格（本体）: **{today_raw_price:,}円**",
             f"- 前日比: **{diff_inline}**",
-            f"- 30日最安: **{low30_flag}**（{f'{min_30d_price:,}円' if min_30d_price is not None else 'データ不足'}）",
+            f"- 30日最安: **{low30_flag}**（{f'{min_30d_protein_cost:,.0f}円/kg' if min_30d_protein_cost is not None else 'データ不足'}）",
             "",
             "## 買い時コメント",
             variant_push_text,
@@ -554,12 +559,13 @@ def build_marketing_report(
 
     return PriceChangeReport(
         level=level,
-        today_price=today_price,
-        yesterday_price=yesterday_price,
+        today_protein_cost=today_protein_cost,
+        today_raw_price=today_raw_price,
+        yesterday_protein_cost=yesterday_protein_cost,
         diff_yen=diff_yen,
         diff_pct=diff_pct,
         is_30d_low=is_30d_low,
-        min_30d_price=min_30d_price,
+        min_30d_protein_cost=min_30d_protein_cost,
         variant=variant,
         variant_headline=variant_headline,
         variant_reason=variant_reason,
@@ -1105,7 +1111,7 @@ def main():
                 top3 = offers_for_this[:3]
                 lines = [
                     f"- canonical_id: `{m.canonical_id}` / keyword: {m.search_keyword}",
-                    f"- 今日の最安: **{best.shop_name}** / 実質(タンパク1kgあたり): **{best.protein_cost:,.0f}円**",
+                    f"- 今日の最安: **{best.shop_name}** / 実質(タンパク1kgあたり): **{best.protein_cost:,.0f}円/kg**",
                     f"- 価格: {best.raw_price:,}円 送料加算:{best.shipping_cost:,}円 pt:{best.point_rate*100:.1f}%",
                     f"- 商品: {best.item_name[:100]}",
                     f"- URL: {best.item_url}",
@@ -1155,10 +1161,11 @@ def main():
         )
         lines = [
             f"- product: {m.canonical_id} / {m.search_keyword or m.brand}",
-            f"- today: {report.today_price:,}円",
+            f"- today(実質): {report.today_protein_cost:,.0f}円/kg",
+            f"- today(価格): {report.today_raw_price:,}円",
             f"- 前日比: {diff_line}",
             f"- 30日最安: {'更新' if report.is_30d_low else '未更新'}"
-            + (f" ({report.min_30d_price:,}円)" if report.min_30d_price is not None else ""),
+            + (f" ({report.min_30d_protein_cost:,.0f}円/kg)" if report.min_30d_protein_cost is not None else ""),
             f"- level: {report.level}",
             f"- variant: {report.variant} ({report.date_jst} {report.weekday_jst})",
             f"- image: {'採用' if report.image_selected else '未取得'}",
