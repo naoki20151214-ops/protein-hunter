@@ -81,6 +81,15 @@ class MasterItem:
 
 
 @dataclass
+class CatalogItem:
+    canonical_id: str
+    brand: str
+    protein_type: str
+    capacity_kg: float
+    search_keyword: str
+
+
+@dataclass
 class OfferRow:
     date: str
     canonical_id: str
@@ -669,7 +678,166 @@ def open_sheets():
         )
         print(f"DEBUG sheet: worksheet name={min_ws.title} (created)")
 
-    return master_ws, hist_ws, min_ws
+    # Catalog worksheet (create if missing)
+    try:
+        catalog_ws = sh.worksheet("Catalog")
+        print(f"DEBUG sheet: worksheet name={catalog_ws.title}")
+    except gspread.exceptions.WorksheetNotFound:
+        print("DEBUG sheet: worksheet name=Catalog (not found, creating)")
+        catalog_ws = sh.add_worksheet(title="Catalog", rows=2000, cols=10)
+        catalog_ws.append_row(
+            ["canonical_id", "brand", "type", "capacity_kg", "search_keyword", "created_at"],
+            value_input_option="RAW",
+        )
+        print(f"DEBUG sheet: worksheet name={catalog_ws.title} (created)")
+
+    # Query list worksheet (optional)
+    try:
+        query_ws = sh.worksheet("Query_List")
+        print(f"DEBUG sheet: worksheet name={query_ws.title}")
+    except gspread.exceptions.WorksheetNotFound:
+        query_ws = None
+        print("WARNING sheet: worksheet name=Query_List not found (catalog auto-update skipped)")
+
+    return master_ws, hist_ws, min_ws, catalog_ws, query_ws
+
+
+def _normalize_text(value: str) -> str:
+    return (value or "").strip().lower()
+
+
+def extract_brand(item_name: str) -> Optional[Tuple[str, str]]:
+    name = _normalize_text(item_name)
+    mappings = [
+        (["エクスプロージョン", "x-plosion", "xplosion"], "エクスプロージョン", "ex"),
+        (["マイプロテイン", "myprotein", "my protein"], "マイプロテイン", "mp"),
+        (["ビーレジェンド"], "ビーレジェンド", "bl"),
+    ]
+    for keywords, brand, code in mappings:
+        if any(k in name for k in keywords):
+            return brand, code
+    return None
+
+
+def extract_type(item_name: str) -> Optional[str]:
+    name = _normalize_text(item_name)
+    if "wpi" in name or "アイソレート" in name:
+        return "WPI"
+    if "ソイ" in name:
+        return "SOY"
+    if "ホエイ" in name:
+        return "WPC"
+    return None
+
+
+def extract_capacity_kg(item_name: str) -> Optional[float]:
+    name = _normalize_text(item_name)
+    kg_match = re.search(r"(\d+(?:\.\d+)?)\s*kg", name, flags=re.IGNORECASE)
+    if kg_match:
+        return safe_float(kg_match.group(1), 0.0)
+
+    g_match = re.search(r"(\d+)\s*g", name, flags=re.IGNORECASE)
+    if g_match:
+        grams = safe_float(g_match.group(1), 0.0)
+        if grams > 0:
+            return grams / 1000.0
+    return None
+
+
+def capacity_token(capacity_kg: float) -> str:
+    normalized = round(capacity_kg, 3)
+    if float(normalized).is_integer():
+        return f"{int(normalized)}kg"
+    text = f"{normalized:.3f}".rstrip("0").rstrip(".")
+    return f"{text}kg"
+
+
+def build_canonical_id(brand_code: str, protein_type: str, capacity_kg: float) -> str:
+    return f"{brand_code}-{protein_type.lower()}-{capacity_token(capacity_kg)}"
+
+
+def read_query_keywords(query_ws) -> List[str]:
+    if query_ws is None:
+        return []
+    rows = query_ws.get_all_records()
+    keywords: List[str] = []
+    for r in rows:
+        kw = str(
+            r.get("search_keyword")
+            or r.get("query")
+            or r.get("keyword")
+            or r.get("検索ワード")
+            or ""
+        ).strip()
+        if kw:
+            keywords.append(kw)
+    return keywords
+
+
+def read_catalog_ids(catalog_ws) -> set:
+    rows = catalog_ws.get_all_records()
+    return {
+        str(r.get("canonical_id", "")).strip()
+        for r in rows
+        if str(r.get("canonical_id", "")).strip()
+    }
+
+
+def update_catalog_from_query_list(catalog_ws, query_ws) -> int:
+    query_keywords = read_query_keywords(query_ws)
+    if not query_keywords:
+        print("INFO catalog: query list is empty or unavailable")
+        return 0
+
+    existing_ids = read_catalog_ids(catalog_ws)
+    new_rows: List[List[Any]] = []
+    run_seen: set = set()
+
+    for keyword in query_keywords:
+        time.sleep(REQUEST_SLEEP_SEC)
+        items, api_total_count = rakuten_search_multi_pages(keyword, total_hits=FETCH_HITS)
+        print(
+            "DEBUG catalog_fetch:",
+            f"keyword={keyword}",
+            f"api_total_count={api_total_count}",
+            f"fetched_items={len(items)}",
+        )
+        for item in items:
+            item_name = str(item.get("itemName", "")).strip()
+            if not item_name:
+                continue
+            brand_info = extract_brand(item_name)
+            if not brand_info:
+                continue
+            protein_type = extract_type(item_name)
+            if not protein_type:
+                continue
+            capacity_kg = extract_capacity_kg(item_name)
+            if not capacity_kg or capacity_kg <= 0:
+                continue
+
+            brand_name, brand_code = brand_info
+            canonical_id = build_canonical_id(brand_code, protein_type, capacity_kg)
+            if canonical_id in existing_ids or canonical_id in run_seen:
+                continue
+
+            run_seen.add(canonical_id)
+            new_rows.append([
+                canonical_id,
+                brand_name,
+                protein_type,
+                round(capacity_kg, 3),
+                keyword,
+                jst_now_iso(),
+            ])
+
+    if new_rows:
+        print(f"INFO catalog: appending new rows count={len(new_rows)}")
+        catalog_ws.append_rows(new_rows, value_input_option="RAW")
+    else:
+        print("INFO catalog: no new canonical_id to append")
+
+    return len(new_rows)
 
 def read_master(master_ws) -> List[MasterItem]:
     rows = master_ws.get_all_records()
@@ -1005,7 +1173,9 @@ def main():
     today = jst_today_str()
     yesterday = (jst_date() - timedelta(days=1)).isoformat()
 
-    master_ws, hist_ws, min_ws = open_sheets()
+    master_ws, hist_ws, min_ws, catalog_ws, query_ws = open_sheets()
+    new_catalog_count = update_catalog_from_query_list(catalog_ws, query_ws)
+    print(f"INFO catalog: appended_count={new_catalog_count}")
     masters = read_master(master_ws)
     if not masters:
         raise RuntimeError("Master_List is empty or missing required columns.")
