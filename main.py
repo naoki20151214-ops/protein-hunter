@@ -44,6 +44,9 @@ HERO_K = int(os.environ.get("HERO_K", "3"))
 
 REQUEST_SLEEP_SEC = float(os.environ.get("REQUEST_SLEEP_SEC", "1.0"))
 STRICT_MODE = os.environ.get("STRICT_MODE", "false").strip().lower() in {"1", "true", "yes", "on"}
+TRACK_DROP_ALERT_RATIO = float(os.environ.get("TRACK_DROP_ALERT_RATIO", "0.5"))
+TRACK_DROP_ALERT_MIN_DELTA = int(os.environ.get("TRACK_DROP_ALERT_MIN_DELTA", "3"))
+TRACK_DROP_ENFORCE = os.environ.get("TRACK_DROP_ENFORCE", "false").strip().lower() in {"1", "true", "yes", "on"}
 
 # Optional extra point boost (Phase2). Example: 0.02 for +2%
 EXTRA_POINT_RATE = float(os.environ.get("EXTRA_POINT_RATE", "0.0"))  # 0.0..1.0
@@ -686,10 +689,12 @@ def open_sheets():
         print("DEBUG sheet: worksheet name=Catalog (not found, creating)")
         catalog_ws = sh.add_worksheet(title="Catalog", rows=2000, cols=10)
         catalog_ws.append_row(
-            ["canonical_id", "brand", "type", "capacity_kg", "search_keyword", "created_at"],
+            ["canonical_id", "brand", "type", "capacity_kg", "search_keyword", "track", "created_at"],
             value_input_option="RAW",
         )
         print(f"DEBUG sheet: worksheet name={catalog_ws.title} (created)")
+
+    ensure_catalog_track_column(catalog_ws)
 
     # Query list worksheet (optional)
     try:
@@ -704,6 +709,38 @@ def open_sheets():
 
 def _normalize_text(value: str) -> str:
     return (value or "").strip().lower()
+
+
+def ensure_catalog_track_column(catalog_ws) -> None:
+    values = catalog_ws.get_all_values()
+    if not values:
+        catalog_ws.append_row(
+            ["canonical_id", "brand", "type", "capacity_kg", "search_keyword", "track", "created_at"],
+            value_input_option="RAW",
+        )
+        print("INFO catalog: created header with track column")
+        return
+
+    header = [str(v).strip() for v in values[0]]
+    if "track" in header:
+        return
+
+    row_count = len(values)
+    track_col_idx = len(header) + 1
+    col_letter = gspread.utils.rowcol_to_a1(1, track_col_idx)[:-1]
+
+    catalog_ws.update(
+        range_name=f"{col_letter}1",
+        values=[["track"]],
+        value_input_option="RAW",
+    )
+    if row_count > 1:
+        catalog_ws.update(
+            range_name=f"{col_letter}2:{col_letter}{row_count}",
+            values=[[0] for _ in range(row_count - 1)],
+            value_input_option="RAW",
+        )
+    print("INFO catalog: track column was missing, created with default=0")
 
 
 def extract_brand(item_name: str) -> Optional[Tuple[str, str]]:
@@ -828,6 +865,7 @@ def update_catalog_from_query_list(catalog_ws, query_ws) -> int:
                 protein_type,
                 round(capacity_kg, 3),
                 keyword,
+                0,
                 jst_now_iso(),
             ])
 
@@ -857,6 +895,63 @@ def read_master(master_ws) -> List[MasterItem]:
             )
         )
     return items
+
+
+def read_catalog_tracked_items(catalog_ws, master_by_id: Dict[str, MasterItem]) -> List[MasterItem]:
+    rows = catalog_ws.get_all_records()
+    items: List[MasterItem] = []
+    for r in rows:
+        cid = str(r.get("canonical_id", "")).strip()
+        if not cid:
+            continue
+        track = safe_int(r.get("track", 0), 0)
+        if track != 1:
+            continue
+
+        kw = str(r.get("search_keyword", "")).strip()
+        master = master_by_id.get(cid)
+        if not master:
+            print(f"WARNING catalog: canonical_id={cid} has track=1 but no Master_List record. skipped")
+            continue
+
+        search_keyword = kw or master.search_keyword
+        items.append(
+            MasterItem(
+                canonical_id=cid,
+                search_keyword=search_keyword,
+                brand=str(r.get("brand", "")).strip() or master.brand,
+                capacity_kg=safe_float(r.get("capacity_kg", master.capacity_kg), master.capacity_kg),
+                protein_ratio=master.protein_ratio,
+            )
+        )
+    return items
+
+
+def read_yesterday_tracked_count_from_history(hist_ws, target_date: str) -> int:
+    rows = hist_ws.get_all_records()
+    tracked_ids = {
+        str(r.get("canonical_id", "")).strip()
+        for r in rows
+        if str(r.get("date", "")).strip() == target_date and str(r.get("canonical_id", "")).strip()
+    }
+    return len(tracked_ids)
+
+
+def evaluate_track_drop(today_count: int, yesterday_count: int) -> Tuple[bool, str]:
+    if yesterday_count <= 0:
+        return False, ""
+    delta = yesterday_count - today_count
+    if delta <= 0:
+        return False, ""
+    ratio = delta / yesterday_count
+    is_large_drop = delta >= TRACK_DROP_ALERT_MIN_DELTA and ratio >= TRACK_DROP_ALERT_RATIO
+    if not is_large_drop:
+        return False, ""
+    return True, (
+        f"追跡対象が急減: today={today_count}, yesterday={yesterday_count}, "
+        f"delta=-{delta}, ratio={ratio*100:.1f}% "
+        f"(threshold: min_delta={TRACK_DROP_ALERT_MIN_DELTA}, min_ratio={TRACK_DROP_ALERT_RATIO*100:.1f}%)"
+    )
 
 def ensure_history_headers(hist_ws) -> None:
     existing = hist_ws.get_all_values()
@@ -1176,9 +1271,23 @@ def main():
     master_ws, hist_ws, min_ws, catalog_ws, query_ws = open_sheets()
     new_catalog_count = update_catalog_from_query_list(catalog_ws, query_ws)
     print(f"INFO catalog: appended_count={new_catalog_count}")
-    masters = read_master(master_ws)
-    if not masters:
+    masters_all = read_master(master_ws)
+    if not masters_all:
         raise RuntimeError("Master_List is empty or missing required columns.")
+
+    master_by_id = {m.canonical_id: m for m in masters_all}
+    masters = read_catalog_tracked_items(catalog_ws, master_by_id)
+    if not masters:
+        raise RuntimeError("Catalog track=1 item is empty or missing required canonical_id/search settings.")
+
+    yesterday_track_count = read_yesterday_tracked_count_from_history(hist_ws, yesterday)
+    today_track_count = len({m.canonical_id for m in masters})
+    is_drop, drop_message = evaluate_track_drop(today_track_count, yesterday_track_count)
+    if is_drop:
+        discord_notify("⚠️ Track target count dropped sharply", [drop_message])
+        if TRACK_DROP_ENFORCE:
+            raise RuntimeError(f"TRACK_DROP_ENFORCE=true: {drop_message}")
+        print(f"WARNING track: {drop_message}")
 
     # Read minima from Min_Summary only (fast)
     yday_min = read_min_summary(min_ws, yesterday)   # {cid: (cost, shop, url)}
@@ -1391,6 +1500,8 @@ def main():
 
     summary_lines = [
         f"- date: {today}",
+        f"- tracked products (Catalog track=1): {today_track_count}",
+        f"- yesterday tracked products: {yesterday_track_count}",
         f"- appended rows: {len(all_offers)}",
         f"- change notifications: {len(notify_payloads)}",
         f"- marketing drafts: {len(marketing_reports)}",
