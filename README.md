@@ -41,9 +41,21 @@
 - `SHEET_ID`
 - `GSPREAD_SERVICE_ACCOUNT_JSON_B64`
 - `STRICT_MODE`（任意、`true/false`）
+- `TRACK_DROP_ALERT_RATIO`（任意、既定 `0.5`。前日比で急減とみなす割合）
+- `TRACK_DROP_ALERT_MIN_DELTA`（任意、既定 `3`。前日比で急減とみなす最小件数差）
+- `TRACK_DROP_ENFORCE`（任意、`true/false`。`true` なら急減時にジョブを失敗）
 - `HATENA_ID`（任意、はてなブログBasic認証ユーザー）
 - `HATENA_API_KEY`（任意、はてなブログAPIキー）
 - `HATENA_BLOG_ID`（任意、ブログドメイン。例: `protain-hunter.hatenablog.com`）
+
+## 追跡対象の運用（Catalog `track` 列）
+
+- `Master_List` は参照専用です（更新・追加しません）。
+- 追跡対象は `Catalog` シートの `track` 列で管理します。
+  - `track=1`: 日次追跡する
+  - `track=0`: 追跡しない
+- 新規 `canonical_id` の自動追加は従来どおり `Catalog` に入ります（追加時は `track=0`）。
+- 運用は **Catalog の `track` を 1 にするだけ** です。
 
 ## はてなブログ下書き投稿
 
