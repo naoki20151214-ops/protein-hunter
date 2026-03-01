@@ -694,7 +694,7 @@ def open_sheets():
         )
         print(f"DEBUG sheet: worksheet name={catalog_ws.title} (created)")
 
-    ensure_catalog_track_column(catalog_ws)
+    ensure_catalog_schema(catalog_ws)
 
     # Query list worksheet (optional)
     try:
@@ -711,7 +711,7 @@ def _normalize_text(value: str) -> str:
     return (value or "").strip().lower()
 
 
-def ensure_catalog_track_column(catalog_ws) -> None:
+def ensure_catalog_schema(catalog_ws) -> None:
     values = catalog_ws.get_all_values()
     if not values:
         catalog_ws.append_row(
@@ -735,12 +735,32 @@ def ensure_catalog_track_column(catalog_ws) -> None:
         value_input_option="RAW",
     )
     if row_count > 1:
+        canonical_col_idx = next(
+            (idx for idx, col in enumerate(header, start=1) if str(col).strip() == "canonical_id"),
+            None,
+        )
+        if canonical_col_idx is None:
+            print("WARNING catalog: canonical_id column missing, leaving track values empty")
+            return
+
+        data_rows = values[1:]
+        track_values = []
+        for row in data_rows:
+            cid = str(row[canonical_col_idx - 1]).strip() if len(row) >= canonical_col_idx else ""
+            track_values.append([1 if cid else ""])
         catalog_ws.update(
             range_name=f"{col_letter}2:{col_letter}{row_count}",
-            values=[[0] for _ in range(row_count - 1)],
+            values=track_values,
             value_input_option="RAW",
         )
-    print("INFO catalog: track column was missing, created with default=0")
+    print("INFO catalog: track column was missing, created and initialized from canonical_id")
+
+
+def _is_track_enabled(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    text = str(value or "").strip().lower()
+    return text in {"1", "true", "t", "yes", "y", "on"}
 
 
 def extract_brand(item_name: str) -> Optional[Tuple[str, str]]:
@@ -897,15 +917,17 @@ def read_master(master_ws) -> List[MasterItem]:
     return items
 
 
-def read_catalog_tracked_items(catalog_ws, master_by_id: Dict[str, MasterItem]) -> List[MasterItem]:
+def read_tracked_catalog(catalog_ws, master_by_id: Dict[str, MasterItem]) -> List[MasterItem]:
     rows = catalog_ws.get_all_records()
+    header = [str(v).strip() for v in (catalog_ws.row_values(1) or [])]
+    has_track_column = "track" in header
+
     items: List[MasterItem] = []
     for r in rows:
         cid = str(r.get("canonical_id", "")).strip()
         if not cid:
             continue
-        track = safe_int(r.get("track", 0), 0)
-        if track != 1:
+        if has_track_column and not _is_track_enabled(r.get("track", "")):
             continue
 
         kw = str(r.get("search_keyword", "")).strip()
@@ -1276,9 +1298,12 @@ def main():
         raise RuntimeError("Master_List is empty or missing required columns.")
 
     master_by_id = {m.canonical_id: m for m in masters_all}
-    masters = read_catalog_tracked_items(catalog_ws, master_by_id)
+    masters = read_tracked_catalog(catalog_ws, master_by_id)
     if not masters:
-        raise RuntimeError("Catalog track=1 item is empty or missing required canonical_id/search settings.")
+        warning_msg = "Catalog tracked items resolved to 0; fallback to Master_List."
+        print(f"WARNING catalog: {warning_msg}")
+        discord_notify("⚠️ Catalog tracking fallback", [warning_msg])
+        masters = masters_all
 
     yesterday_track_count = read_yesterday_tracked_count_from_history(hist_ws, yesterday)
     today_track_count = len({m.canonical_id for m in masters})
