@@ -696,13 +696,27 @@ def open_sheets():
 
     ensure_catalog_schema(catalog_ws)
 
-    # Query list worksheet (optional)
+    # Query list worksheet (auto-create if missing)
+    query_ws_created = False
     try:
         query_ws = sh.worksheet("Query_List")
         print(f"DEBUG sheet: worksheet name={query_ws.title}")
     except gspread.exceptions.WorksheetNotFound:
-        query_ws = None
-        print("WARNING sheet: worksheet name=Query_List not found (catalog auto-update skipped)")
+        print("WARNING sheet: worksheet name=Query_List not found (creating)")
+        query_ws = sh.add_worksheet(title="Query_List", rows=2000, cols=5)
+        query_ws.append_row(
+            ["search_keyword", "enabled", "created_at", "note"],
+            value_input_option="RAW",
+        )
+        query_ws_created = True
+        print("INFO sheet: worksheet name=Query_List created with default headers")
+
+    seeded = seed_query_list_from_master(master_ws, query_ws)
+    print(
+        "INFO query_list:",
+        f"seeded_from_master={seeded}",
+        f"created_now={query_ws_created}",
+    )
 
     return master_ws, hist_ws, min_ws, catalog_ws, query_ws
 
@@ -747,13 +761,15 @@ def ensure_catalog_schema(catalog_ws) -> None:
         track_values = []
         for row in data_rows:
             cid = str(row[canonical_col_idx - 1]).strip() if len(row) >= canonical_col_idx else ""
-            track_values.append([1 if cid else ""])
+            if not cid:
+                print("DEBUG catalog: empty canonical_id row detected while initializing track")
+            track_values.append([1])
         catalog_ws.update(
             range_name=f"{col_letter}2:{col_letter}{row_count}",
             values=track_values,
             value_input_option="RAW",
         )
-    print("INFO catalog: track column was missing, created and initialized from canonical_id")
+    print("INFO catalog: track column was missing, created and initialized to 1 for existing rows")
 
 
 def _is_track_enabled(value: Any) -> bool:
@@ -761,6 +777,35 @@ def _is_track_enabled(value: Any) -> bool:
         return value
     text = str(value or "").strip().lower()
     return text in {"1", "true", "t", "yes", "y", "on"}
+
+
+def seed_query_list_from_master(master_ws, query_ws) -> int:
+    query_rows = query_ws.get_all_records()
+    existing_keywords = {
+        str(r.get("search_keyword") or r.get("query") or r.get("keyword") or "").strip().lower()
+        for r in query_rows
+        if str(r.get("search_keyword") or r.get("query") or r.get("keyword") or "").strip()
+    }
+
+    master_rows = master_ws.get_all_records()
+    new_rows: List[List[Any]] = []
+    for r in master_rows:
+        keyword = str(r.get("search_keyword", "")).strip()
+        if not keyword:
+            continue
+        keyword_key = keyword.lower()
+        if keyword_key in existing_keywords:
+            continue
+        existing_keywords.add(keyword_key)
+        new_rows.append([keyword, 1, jst_now_iso(), "seed_from_master_list"])
+
+    if new_rows:
+        query_ws.append_rows(new_rows, value_input_option="RAW")
+        print(f"INFO query_list: seeded rows from Master_List count={len(new_rows)}")
+    else:
+        print("INFO query_list: no seed rows needed (already populated)")
+
+    return len(new_rows)
 
 
 def extract_brand(item_name: str) -> Optional[Tuple[str, str]]:
@@ -813,12 +858,14 @@ def build_canonical_id(brand_code: str, protein_type: str, capacity_kg: float) -
     return f"{brand_code}-{protein_type.lower()}-{capacity_token(capacity_kg)}"
 
 
-def read_query_keywords(query_ws) -> List[str]:
+def read_query_keywords(query_ws) -> Tuple[List[str], Dict[str, int]]:
     if query_ws is None:
-        return []
+        return [], {"total_rows": 0, "enabled_rows": 0, "disabled_rows": 0, "empty_keyword_rows": 0}
     rows = query_ws.get_all_records()
     keywords: List[str] = []
+    stats = {"total_rows": 0, "enabled_rows": 0, "disabled_rows": 0, "empty_keyword_rows": 0}
     for r in rows:
+        stats["total_rows"] += 1
         kw = str(
             r.get("search_keyword")
             or r.get("query")
@@ -826,9 +873,19 @@ def read_query_keywords(query_ws) -> List[str]:
             or r.get("検索ワード")
             or ""
         ).strip()
-        if kw:
+        if not kw:
+            stats["empty_keyword_rows"] += 1
+            continue
+
+        enabled_raw = r.get("enabled", 1)
+        enabled = True if str(enabled_raw or "").strip() == "" else _is_track_enabled(enabled_raw)
+        if enabled:
             keywords.append(kw)
-    return keywords
+            stats["enabled_rows"] += 1
+        else:
+            stats["disabled_rows"] += 1
+
+    return keywords, stats
 
 
 def read_catalog_ids(catalog_ws) -> set:
@@ -840,11 +897,15 @@ def read_catalog_ids(catalog_ws) -> set:
     }
 
 
-def update_catalog_from_query_list(catalog_ws, query_ws) -> int:
-    query_keywords = read_query_keywords(query_ws)
+def update_catalog_from_query_list(catalog_ws, query_ws) -> Tuple[int, Dict[str, Any]]:
+    query_keywords, query_stats = read_query_keywords(query_ws)
+    fetch_zero_keywords = 0
     if not query_keywords:
-        print("INFO catalog: query list is empty or unavailable")
-        return 0
+        print(
+            "INFO catalog: query list has no enabled keywords",
+            f"stats={query_stats}",
+        )
+        return 0, {"query_stats": query_stats, "fetch_zero_keywords": 0}
 
     existing_ids = read_catalog_ids(catalog_ws)
     new_rows: List[List[Any]] = []
@@ -859,6 +920,8 @@ def update_catalog_from_query_list(catalog_ws, query_ws) -> int:
             f"api_total_count={api_total_count}",
             f"fetched_items={len(items)}",
         )
+        if api_total_count <= 0:
+            fetch_zero_keywords += 1
         for item in items:
             item_name = str(item.get("itemName", "")).strip()
             if not item_name:
@@ -893,9 +956,13 @@ def update_catalog_from_query_list(catalog_ws, query_ws) -> int:
         print(f"INFO catalog: appending new rows count={len(new_rows)}")
         catalog_ws.append_rows(new_rows, value_input_option="RAW")
     else:
-        print("INFO catalog: no new canonical_id to append")
+        print(
+            "INFO catalog: no new canonical_id to append",
+            f"query_stats={query_stats}",
+            f"fetch_zero_keywords={fetch_zero_keywords}",
+        )
 
-    return len(new_rows)
+    return len(new_rows), {"query_stats": query_stats, "fetch_zero_keywords": fetch_zero_keywords}
 
 def read_master(master_ws) -> List[MasterItem]:
     rows = master_ws.get_all_records()
@@ -1291,8 +1358,8 @@ def main():
     yesterday = (jst_date() - timedelta(days=1)).isoformat()
 
     master_ws, hist_ws, min_ws, catalog_ws, query_ws = open_sheets()
-    new_catalog_count = update_catalog_from_query_list(catalog_ws, query_ws)
-    print(f"INFO catalog: appended_count={new_catalog_count}")
+    new_catalog_count, catalog_update_info = update_catalog_from_query_list(catalog_ws, query_ws)
+    print(f"INFO catalog: appended_count={new_catalog_count} info={catalog_update_info}")
     masters_all = read_master(master_ws)
     if not masters_all:
         raise RuntimeError("Master_List is empty or missing required columns.")
@@ -1300,10 +1367,29 @@ def main():
     master_by_id = {m.canonical_id: m for m in masters_all}
     masters = read_tracked_catalog(catalog_ws, master_by_id)
     if not masters:
-        warning_msg = "Catalog tracked items resolved to 0; fallback to Master_List."
-        print(f"WARNING catalog: {warning_msg}")
-        discord_notify("⚠️ Catalog tracking fallback", [warning_msg])
-        masters = masters_all
+        print("WARNING catalog: tracked items resolved to 0 on first pass. trying Query_List rebuild once")
+        rebuild_count, rebuild_info = update_catalog_from_query_list(catalog_ws, query_ws)
+        print(f"INFO catalog: rebuild_attempt_appended_count={rebuild_count} info={rebuild_info}")
+        masters = read_tracked_catalog(catalog_ws, master_by_id)
+
+        if not masters:
+            query_stats = rebuild_info.get("query_stats", {})
+            fetch_zero_keywords = rebuild_info.get("fetch_zero_keywords", 0)
+            fallback_reason = (
+                "Catalog track=1 が 0 件のため Query_List 再生成を1回実施したが解決せず、"
+                "Master_List にフォールバック"
+            )
+            detail_lines = [
+                fallback_reason,
+                f"query_total_rows={query_stats.get('total_rows', 0)}",
+                f"query_enabled_rows={query_stats.get('enabled_rows', 0)}",
+                f"query_disabled_rows={query_stats.get('disabled_rows', 0)}",
+                f"query_empty_keyword_rows={query_stats.get('empty_keyword_rows', 0)}",
+                f"query_api_total_count_zero_keywords={fetch_zero_keywords}",
+            ]
+            print("WARNING catalog:", " | ".join(detail_lines))
+            discord_notify("⚠️ Catalog tracking fallback", detail_lines)
+            masters = masters_all
 
     yesterday_track_count = read_yesterday_tracked_count_from_history(hist_ws, yesterday)
     today_track_count = len({m.canonical_id for m in masters})
