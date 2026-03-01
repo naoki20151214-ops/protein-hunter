@@ -504,7 +504,7 @@ def build_marketing_report(
                 point_pct = (offer.point_rate if offer.point_rate is not None else 0.0) * 100.0
                 ranking_sections.append(f"### {medal} {shorten_item_name(offer.item_name, 60)}")
                 if offer.item_url:
-                    ranking_sections.append(f"**👉 [商品を見に行く]({offer.item_url})**")
+                    ranking_sections.append(f"**👉 [楽天で価格と在庫を確認する]({offer.item_url})**")
                 if offer.image_url:
                     ranking_sections.append(f"![商品画像]({offer.image_url})")
                 ranking_sections.extend(
