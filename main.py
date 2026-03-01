@@ -1185,6 +1185,7 @@ def main():
     alltime_min = read_alltime_min(min_ws)          # {cid: (cost, shop, url)}
 
     all_offers: List[OfferRow] = []
+    daily_bests: List[OfferRow] = []
     notify_payloads: List[Tuple[str, List[str]]] = []
     marketing_reports: List[Tuple[MasterItem, OfferRow, PriceChangeReport, ChangeFlags]] = []
     run_errors: List[str] = []
@@ -1254,6 +1255,7 @@ def main():
         # Determine today's best and upsert Min_Summary
         if offers_for_this:
             best = offers_for_this[0]
+            daily_bests.append(best)
             ranking_offers = offers_for_this[:RANKING_N]
             if best.image_url:
                 print(f"INFO selected best_offer.image_url canonical_id={m.canonical_id} url={best.image_url}")
@@ -1317,6 +1319,24 @@ def main():
 
     append_history(hist_ws, all_offers)
 
+    daily_hatena_result = HatenaPostResult(ok=True, status_code=None, endpoint="", message="skipped")
+    if daily_bests:
+        daily_bests.sort(key=lambda x: x.protein_cost)
+        daily_ranking_markdown = build_top3_markdown(daily_bests)
+        daily_hatena_result = post_top3_to_hatena(daily_ranking_markdown)
+        print(
+            f"INFO hatena: daily ranking post ok={daily_hatena_result.ok} "
+            f"status={daily_hatena_result.status_code} endpoint={daily_hatena_result.endpoint}"
+        )
+        if not daily_hatena_result.ok:
+            run_errors.append(
+                "Hatena daily ranking draft post failed "
+                f"(status={daily_hatena_result.status_code}, endpoint={daily_hatena_result.endpoint}): "
+                f"{daily_hatena_result.message}"
+            )
+    else:
+        print("WARNING hatena: skipped daily ranking post because daily_bests is empty")
+
     # Send notifications
     for title, lines in notify_payloads:
         discord_notify(title, lines)
@@ -1360,6 +1380,10 @@ def main():
         )
 
         hatena_result = post_top3_to_hatena(report.hatena_markdown)
+        print(
+            f"INFO hatena: marketing draft post ok={hatena_result.ok} "
+            f"status={hatena_result.status_code} endpoint={hatena_result.endpoint}"
+        )
         if not hatena_result.ok:
             run_errors.append(
                 f"Hatena draft post failed (status={hatena_result.status_code}, endpoint={hatena_result.endpoint}): {hatena_result.message}"
@@ -1370,6 +1394,9 @@ def main():
         f"- appended rows: {len(all_offers)}",
         f"- change notifications: {len(notify_payloads)}",
         f"- marketing drafts: {len(marketing_reports)}",
+        f"- daily hatena status: {'OK' if daily_hatena_result.ok else 'NG'}",
+        f"- daily hatena endpoint: {daily_hatena_result.endpoint or '(not built)'}",
+        f"- daily hatena http_status: {daily_hatena_result.status_code if daily_hatena_result.status_code is not None else 'N/A'}",
         f"- hatena status: {'OK' if hatena_result.ok else 'NG'}",
         f"- hatena endpoint: {hatena_result.endpoint or '(not built)'}",
         f"- hatena http_status: {hatena_result.status_code if hatena_result.status_code is not None else 'N/A'}",
